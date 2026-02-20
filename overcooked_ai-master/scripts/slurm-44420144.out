@@ -1,0 +1,16 @@
+/var/slurm/slurmd/job44420144/slurm_script: line 18: cd: /om/scratch/Mon/mabdel03/6.S890/overcooked_ai/scripts/src/human_aware_rl: No such file or directory
+=========================================
+Step 1: Training BC models
+=========================================
+/om/scratch/Mon/mabdel03/conda_envs/MAL_env/bin/python: Error while finding module specification for 'human_aware_rl.imitation.train_bc_models' (ModuleNotFoundError: No module named 'human_aware_rl')
+=========================================
+Step 2: Training PPO Self-Play (FAST)
+=========================================
+/om/scratch/Mon/mabdel03/conda_envs/MAL_env/bin/python: Error while finding module specification for 'human_aware_rl.ppo.train_ppo_sp' (ModuleNotFoundError: No module named 'human_aware_rl')
+=========================================
+Step 3: Training PPO with BC partner (FAST)
+=========================================
+/om/scratch/Mon/mabdel03/conda_envs/MAL_env/bin/python: Error while finding module specification for 'human_aware_rl.ppo.train_ppo_bc' (ModuleNotFoundError: No module named 'human_aware_rl')
+=========================================
+All training complete!
+=========================================

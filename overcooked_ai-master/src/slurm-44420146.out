@@ -1,0 +1,476 @@
+<frozen importlib._bootstrap>:488: RuntimeWarning: Your system is avx2 capable but pygame was not built with support for it. The performance of some of your blits could be adversely affected. Consider enabling compile time detection with environment variables like PYGAME_DETECT_AVX2=1 if you are compiling without cross compilation.
+/om/scratch/Mon/mabdel03/conda_envs/MAL_env/lib/python3.12/site-packages/pygame/pkgdata.py:25: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  from pkg_resources import resource_stream, resource_exists
+WARNING:2025-12-06 00:10:19,636:jax._src.xla_bridge:864: An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+
+############################################################
+# Run 1/5: cramped_room (seed=0)
+############################################################
+
+============================================================
+Training PPO Self-Play Agent
+============================================================
+Layout: cramped_room -> cramped_room
+Seed: 0
+Total timesteps: 6,600,000
+Learning rate: 0.000163
+Gamma: 0.964
+Clip epsilon: 0.132
+Results dir: results/ppo_sp
+============================================================
+
+Starting PPO training for 6600000 timesteps
+Layout: cramped_room
+Num envs: 30, Num steps: 400
+Batch size: 12000
+Early stop patience: 20 updates
+Update 0/550 | Steps: 12,000 | FPS: 212 | Reward: 4.0±3.4 | Loss: -0.3581 | Ent: 0.196
+Saved checkpoint to results/ppo_sp/ppo_sp_cramped_room_seed0/checkpoint_000000
+Update 1/550 | Steps: 24,000 | FPS: 235 | Reward: 4.3±3.7 | Loss: -0.3509 | Ent: 0.192
+Update 2/550 | Steps: 36,000 | FPS: 244 | Reward: 4.6±4.3 | Loss: -0.3391 | Ent: 0.188
+Update 3/550 | Steps: 48,000 | FPS: 248 | Reward: 5.3±4.7 | Loss: -0.3408 | Ent: 0.184
+Update 4/550 | Steps: 60,000 | FPS: 251 | Reward: 5.9±5.2 | Loss: -0.3327 | Ent: 0.180
+Update 5/550 | Steps: 72,000 | FPS: 252 | Reward: 6.4±4.5 | Loss: -0.3180 | Ent: 0.176
+Update 6/550 | Steps: 84,000 | FPS: 253 | Reward: 6.9±5.0 | Loss: -0.3059 | Ent: 0.172
+Update 7/550 | Steps: 96,000 | FPS: 255 | Reward: 7.0±5.0 | Loss: -0.2900 | Ent: 0.168
+Update 8/550 | Steps: 108,000 | FPS: 256 | Reward: 7.4±5.0 | Loss: -0.2807 | Ent: 0.164
+Update 9/550 | Steps: 120,000 | FPS: 256 | Reward: 7.6±5.6 | Loss: -0.2665 | Ent: 0.160
+Update 10/550 | Steps: 132,000 | FPS: 257 | Reward: 7.2±5.3 | Loss: -0.2554 | Ent: 0.156
+Update 11/550 | Steps: 144,000 | FPS: 258 | Reward: 6.6±5.1 | Loss: -0.2449 | Ent: 0.152
+Update 12/550 | Steps: 156,000 | FPS: 258 | Reward: 6.4±5.1 | Loss: -0.2338 | Ent: 0.148
+Update 13/550 | Steps: 168,000 | FPS: 258 | Reward: 6.0±4.9 | Loss: -0.2261 | Ent: 0.144
+Update 14/550 | Steps: 180,000 | FPS: 258 | Reward: 6.4±5.2 | Loss: -0.2177 | Ent: 0.140
+Update 15/550 | Steps: 192,000 | FPS: 258 | Reward: 5.6±4.6 | Loss: -0.2165 | Ent: 0.136
+Update 16/550 | Steps: 204,000 | FPS: 259 | Reward: 5.9±4.6 | Loss: -0.2115 | Ent: 0.132
+Update 17/550 | Steps: 216,000 | FPS: 259 | Reward: 5.6±4.6 | Loss: -0.2024 | Ent: 0.128
+Update 18/550 | Steps: 228,000 | FPS: 259 | Reward: 6.2±4.9 | Loss: -0.1957 | Ent: 0.124
+Update 19/550 | Steps: 240,000 | FPS: 260 | Reward: 6.3±5.5 | Loss: -0.1904 | Ent: 0.120
+Update 20/550 | Steps: 252,000 | FPS: 260 | Reward: 6.8±5.3 | Loss: -0.1845 | Ent: 0.116
+Update 21/550 | Steps: 264,000 | FPS: 260 | Reward: 6.8±5.5 | Loss: -0.1775 | Ent: 0.112
+Update 22/550 | Steps: 276,000 | FPS: 260 | Reward: 7.8±5.8 | Loss: -0.1710 | Ent: 0.108
+Update 23/550 | Steps: 288,000 | FPS: 261 | Reward: 8.4±5.4 | Loss: -0.1653 | Ent: 0.104
+Update 24/550 | Steps: 300,000 | FPS: 261 | Reward: 8.6±5.6 | Loss: -0.1581 | Ent: 0.100
+Update 25/550 | Steps: 312,000 | FPS: 261 | Reward: 9.0±6.0 | Loss: -0.1540 | Ent: 0.100
+Update 26/550 | Steps: 324,000 | FPS: 261 | Reward: 9.2±6.4 | Loss: -0.1557 | Ent: 0.100
+Update 27/550 | Steps: 336,000 | FPS: 261 | Reward: 9.7±6.8 | Loss: -0.1524 | Ent: 0.100
+Update 28/550 | Steps: 348,000 | FPS: 262 | Reward: 11.0±8.5 | Loss: -0.1488 | Ent: 0.100
+Update 29/550 | Steps: 360,000 | FPS: 262 | Reward: 11.6±9.1 | Loss: -0.1549 | Ent: 0.100
+Update 30/550 | Steps: 372,000 | FPS: 262 | Reward: 12.1±9.7 | Loss: -0.1462 | Ent: 0.100
+Update 31/550 | Steps: 384,000 | FPS: 262 | Reward: 11.8±9.2 | Loss: -0.1470 | Ent: 0.100
+Update 32/550 | Steps: 396,000 | FPS: 262 | Reward: 11.8±8.4 | Loss: -0.1495 | Ent: 0.100
+Update 33/550 | Steps: 408,000 | FPS: 262 | Reward: 13.1±9.9 | Loss: -0.1445 | Ent: 0.100
+Update 34/550 | Steps: 420,000 | FPS: 263 | Reward: 14.7±13.5 | Loss: -0.1423 | Ent: 0.100
+Update 35/550 | Steps: 432,000 | FPS: 263 | Reward: 13.7±13.6 | Loss: -0.1478 | Ent: 0.100
+Update 36/550 | Steps: 444,000 | FPS: 263 | Reward: 12.4±13.3 | Loss: -0.1432 | Ent: 0.100
+Update 37/550 | Steps: 456,000 | FPS: 263 | Reward: 10.3±10.6 | Loss: -0.1324 | Ent: 0.100
+Update 38/550 | Steps: 468,000 | FPS: 263 | Reward: 9.5±11.0 | Loss: -0.1480 | Ent: 0.100
+Update 39/550 | Steps: 480,000 | FPS: 263 | Reward: 10.7±12.6 | Loss: -0.1476 | Ent: 0.100
+Update 40/550 | Steps: 492,000 | FPS: 263 | Reward: 11.3±12.3 | Loss: -0.1511 | Ent: 0.100
+Update 41/550 | Steps: 504,000 | FPS: 264 | Reward: 11.2±12.0 | Loss: -0.1440 | Ent: 0.100
+Update 42/550 | Steps: 516,000 | FPS: 264 | Reward: 11.6±15.4 | Loss: -0.1450 | Ent: 0.100
+Update 43/550 | Steps: 528,000 | FPS: 264 | Reward: 11.4±16.0 | Loss: -0.1525 | Ent: 0.100
+Update 44/550 | Steps: 540,000 | FPS: 264 | Reward: 12.9±17.8 | Loss: -0.1519 | Ent: 0.100
+Update 45/550 | Steps: 552,000 | FPS: 264 | Reward: 9.9±14.0 | Loss: -0.1624 | Ent: 0.100
+Update 46/550 | Steps: 564,000 | FPS: 264 | Reward: 9.3±13.9 | Loss: -0.1596 | Ent: 0.100
+Update 47/550 | Steps: 576,000 | FPS: 264 | Reward: 5.2±7.8 | Loss: -0.1610 | Ent: 0.100
+Update 48/550 | Steps: 588,000 | FPS: 264 | Reward: 5.0±7.8 | Loss: -0.1673 | Ent: 0.100
+Update 49/550 | Steps: 600,000 | FPS: 264 | Reward: 5.1±7.1 | Loss: -0.1597 | Ent: 0.100
+Update 50/550 | Steps: 612,000 | FPS: 264 | Reward: 6.1±8.3 | Loss: -0.1587 | Ent: 0.100
+Saved checkpoint to results/ppo_sp/ppo_sp_cramped_room_seed0/checkpoint_000050
+Update 51/550 | Steps: 624,000 | FPS: 264 | Reward: 5.7±7.6 | Loss: -0.1662 | Ent: 0.100
+Update 52/550 | Steps: 636,000 | FPS: 265 | Reward: 5.4±8.4 | Loss: -0.1580 | Ent: 0.100
+Update 53/550 | Steps: 648,000 | FPS: 265 | Reward: 4.5±7.7 | Loss: -0.1601 | Ent: 0.100
+
+Early stopping: No improvement for 20 updates
+Best mean reward: 14.71
+Saved checkpoint to results/ppo_sp/ppo_sp_cramped_room_seed0/checkpoint_000550
+
+Training completed in 2493.5s
+Final mean reward: 5.25
+Best mean reward: 14.71
+Total episodes: 1650
+
+############################################################
+# Run 2/5: asymmetric_advantages (seed=0)
+############################################################
+
+============================================================
+Training PPO Self-Play Agent
+============================================================
+Layout: asymmetric_advantages -> asymmetric_advantages
+Seed: 0
+Total timesteps: 7,800,000
+Learning rate: 0.00021
+Gamma: 0.964
+Clip epsilon: 0.229
+Results dir: results/ppo_sp
+============================================================
+
+Starting PPO training for 7800000 timesteps
+Layout: asymmetric_advantages
+Num envs: 30, Num steps: 400
+Batch size: 12000
+Early stop patience: 20 updates
+Update 0/650 | Steps: 12,000 | FPS: 246 | Reward: 4.9±4.2 | Loss: -0.3678 | Ent: 0.196
+Saved checkpoint to results/ppo_sp/ppo_sp_asymmetric_advantages_seed0/checkpoint_000000
+Update 1/650 | Steps: 24,000 | FPS: 252 | Reward: 5.9±5.7 | Loss: -0.3514 | Ent: 0.192
+Update 2/650 | Steps: 36,000 | FPS: 254 | Reward: 7.5±6.3 | Loss: -0.3420 | Ent: 0.188
+Update 3/650 | Steps: 48,000 | FPS: 255 | Reward: 9.2±7.6 | Loss: -0.3417 | Ent: 0.184
+Update 4/650 | Steps: 60,000 | FPS: 256 | Reward: 9.9±7.8 | Loss: -0.3315 | Ent: 0.180
+Update 5/650 | Steps: 72,000 | FPS: 257 | Reward: 8.6±8.1 | Loss: -0.3222 | Ent: 0.176
+Update 6/650 | Steps: 84,000 | FPS: 257 | Reward: 7.4±8.0 | Loss: -0.3073 | Ent: 0.172
+Update 7/650 | Steps: 96,000 | FPS: 257 | Reward: 6.4±7.5 | Loss: -0.2935 | Ent: 0.168
+Update 8/650 | Steps: 108,000 | FPS: 257 | Reward: 7.9±8.3 | Loss: -0.2853 | Ent: 0.164
+Update 9/650 | Steps: 120,000 | FPS: 257 | Reward: 12.6±10.2 | Loss: -0.2693 | Ent: 0.160
+Update 10/650 | Steps: 132,000 | FPS: 257 | Reward: 16.8±10.3 | Loss: -0.2391 | Ent: 0.156
+Update 11/650 | Steps: 144,000 | FPS: 257 | Reward: 20.5±10.3 | Loss: -0.2417 | Ent: 0.152
+Update 12/650 | Steps: 156,000 | FPS: 257 | Reward: 23.3±11.2 | Loss: -0.2166 | Ent: 0.148
+Update 13/650 | Steps: 168,000 | FPS: 257 | Reward: 25.6±11.9 | Loss: -0.2071 | Ent: 0.144
+Update 14/650 | Steps: 180,000 | FPS: 257 | Reward: 27.6±12.1 | Loss: -0.2144 | Ent: 0.140
+Update 15/650 | Steps: 192,000 | FPS: 257 | Reward: 29.9±11.7 | Loss: -0.2024 | Ent: 0.136
+Update 16/650 | Steps: 204,000 | FPS: 257 | Reward: 31.6±10.8 | Loss: -0.1937 | Ent: 0.132
+Update 17/650 | Steps: 216,000 | FPS: 257 | Reward: 33.9±10.5 | Loss: -0.1907 | Ent: 0.128
+Update 18/650 | Steps: 228,000 | FPS: 257 | Reward: 34.8±10.8 | Loss: -0.1504 | Ent: 0.124
+Update 19/650 | Steps: 240,000 | FPS: 257 | Reward: 33.8±12.3 | Loss: -0.1314 | Ent: 0.120
+Update 20/650 | Steps: 252,000 | FPS: 257 | Reward: 29.5±14.2 | Loss: -0.1127 | Ent: 0.116
+Update 21/650 | Steps: 264,000 | FPS: 257 | Reward: 24.9±13.0 | Loss: -0.1769 | Ent: 0.112
+Update 22/650 | Steps: 276,000 | FPS: 257 | Reward: 21.7±11.0 | Loss: -0.1330 | Ent: 0.108
+Update 23/650 | Steps: 288,000 | FPS: 257 | Reward: 21.0±9.6 | Loss: -0.1120 | Ent: 0.104
+Update 24/650 | Steps: 300,000 | FPS: 257 | Reward: 21.2±10.3 | Loss: -0.1210 | Ent: 0.100
+Update 25/650 | Steps: 312,000 | FPS: 257 | Reward: 22.8±11.0 | Loss: -0.1056 | Ent: 0.100
+Update 26/650 | Steps: 324,000 | FPS: 257 | Reward: 26.0±11.4 | Loss: -0.1104 | Ent: 0.100
+Update 27/650 | Steps: 336,000 | FPS: 257 | Reward: 28.1±11.6 | Loss: -0.1180 | Ent: 0.100
+Update 28/650 | Steps: 348,000 | FPS: 257 | Reward: 28.8±11.4 | Loss: -0.1133 | Ent: 0.100
+Update 29/650 | Steps: 360,000 | FPS: 257 | Reward: 27.7±10.9 | Loss: -0.0793 | Ent: 0.100
+Update 30/650 | Steps: 372,000 | FPS: 257 | Reward: 25.6±10.5 | Loss: -0.1243 | Ent: 0.100
+Update 31/650 | Steps: 384,000 | FPS: 257 | Reward: 23.6±9.7 | Loss: -0.1312 | Ent: 0.100
+Update 32/650 | Steps: 396,000 | FPS: 257 | Reward: 24.7±11.2 | Loss: -0.1221 | Ent: 0.100
+Update 33/650 | Steps: 408,000 | FPS: 257 | Reward: 28.4±12.3 | Loss: -0.1174 | Ent: 0.100
+Update 34/650 | Steps: 420,000 | FPS: 256 | Reward: 34.2±12.2 | Loss: -0.1249 | Ent: 0.100
+Update 35/650 | Steps: 432,000 | FPS: 256 | Reward: 37.4±10.3 | Loss: -0.1418 | Ent: 0.100
+Update 36/650 | Steps: 444,000 | FPS: 256 | Reward: 37.7±10.2 | Loss: -0.1325 | Ent: 0.100
+Update 37/650 | Steps: 456,000 | FPS: 256 | Reward: 37.8±10.0 | Loss: -0.1434 | Ent: 0.100
+Update 38/650 | Steps: 468,000 | FPS: 256 | Reward: 36.2±10.4 | Loss: -0.1464 | Ent: 0.100
+Update 39/650 | Steps: 480,000 | FPS: 256 | Reward: 37.9±9.3 | Loss: -0.1500 | Ent: 0.100
+Update 40/650 | Steps: 492,000 | FPS: 256 | Reward: 38.6±9.2 | Loss: -0.1470 | Ent: 0.100
+Update 41/650 | Steps: 504,000 | FPS: 256 | Reward: 39.3±9.3 | Loss: -0.1430 | Ent: 0.100
+Update 42/650 | Steps: 516,000 | FPS: 256 | Reward: 40.4±8.7 | Loss: -0.1390 | Ent: 0.100
+Update 43/650 | Steps: 528,000 | FPS: 256 | Reward: 37.7±10.7 | Loss: -0.1229 | Ent: 0.100
+Update 44/650 | Steps: 540,000 | FPS: 256 | Reward: 37.0±10.8 | Loss: -0.1328 | Ent: 0.100
+Update 45/650 | Steps: 552,000 | FPS: 256 | Reward: 36.7±11.2 | Loss: -0.1666 | Ent: 0.100
+Update 46/650 | Steps: 564,000 | FPS: 256 | Reward: 37.9±11.0 | Loss: -0.1438 | Ent: 0.100
+Update 47/650 | Steps: 576,000 | FPS: 256 | Reward: 38.7±11.3 | Loss: -0.1301 | Ent: 0.100
+Update 48/650 | Steps: 588,000 | FPS: 256 | Reward: 37.9±13.1 | Loss: -0.1264 | Ent: 0.100
+Update 49/650 | Steps: 600,000 | FPS: 256 | Reward: 37.1±14.3 | Loss: -0.1342 | Ent: 0.100
+Update 50/650 | Steps: 612,000 | FPS: 256 | Reward: 37.7±16.7 | Loss: -0.1446 | Ent: 0.100
+Saved checkpoint to results/ppo_sp/ppo_sp_asymmetric_advantages_seed0/checkpoint_000050
+Update 51/650 | Steps: 624,000 | FPS: 256 | Reward: 39.7±17.3 | Loss: -0.1443 | Ent: 0.100
+Update 52/650 | Steps: 636,000 | FPS: 256 | Reward: 44.3±17.6 | Loss: -0.1295 | Ent: 0.100
+Update 53/650 | Steps: 648,000 | FPS: 256 | Reward: 50.3±15.5 | Loss: -0.1152 | Ent: 0.100
+Update 54/650 | Steps: 660,000 | FPS: 256 | Reward: 54.7±11.4 | Loss: -0.1386 | Ent: 0.100
+Update 55/650 | Steps: 672,000 | FPS: 256 | Reward: 56.8±7.9 | Loss: -0.1426 | Ent: 0.100
+Update 56/650 | Steps: 684,000 | FPS: 256 | Reward: 57.8±7.7 | Loss: -0.1346 | Ent: 0.100
+Update 57/650 | Steps: 696,000 | FPS: 256 | Reward: 62.4±13.1 | Loss: -0.1284 | Ent: 0.100
+Update 58/650 | Steps: 708,000 | FPS: 256 | Reward: 71.1±27.4 | Loss: -0.1106 | Ent: 0.100
+Update 59/650 | Steps: 720,000 | FPS: 255 | Reward: 81.1±40.1 | Loss: -0.1073 | Ent: 0.100
+Update 60/650 | Steps: 732,000 | FPS: 255 | Reward: 82.2±47.7 | Loss: -0.1092 | Ent: 0.100
+Update 61/650 | Steps: 744,000 | FPS: 255 | Reward: 87.1±52.8 | Loss: -0.1132 | Ent: 0.100
+Update 62/650 | Steps: 756,000 | FPS: 255 | Reward: 79.2±53.4 | Loss: -0.1258 | Ent: 0.100
+Update 63/650 | Steps: 768,000 | FPS: 255 | Reward: 79.4±55.5 | Loss: -0.1243 | Ent: 0.100
+Update 64/650 | Steps: 780,000 | FPS: 255 | Reward: 76.9±53.9 | Loss: -0.1272 | Ent: 0.100
+Update 65/650 | Steps: 792,000 | FPS: 255 | Reward: 79.3±51.2 | Loss: -0.1189 | Ent: 0.100
+Update 66/650 | Steps: 804,000 | FPS: 255 | Reward: 84.3±47.8 | Loss: -0.1069 | Ent: 0.100
+Update 67/650 | Steps: 816,000 | FPS: 255 | Reward: 86.6±41.8 | Loss: -0.1158 | Ent: 0.100
+Update 68/650 | Steps: 828,000 | FPS: 255 | Reward: 79.9±38.0 | Loss: -0.1245 | Ent: 0.100
+Update 69/650 | Steps: 840,000 | FPS: 255 | Reward: 71.0±36.8 | Loss: -0.1331 | Ent: 0.100
+Update 70/650 | Steps: 852,000 | FPS: 255 | Reward: 52.5±29.8 | Loss: -0.1382 | Ent: 0.100
+Update 71/650 | Steps: 864,000 | FPS: 255 | Reward: 44.4±29.0 | Loss: -0.1484 | Ent: 0.100
+Update 72/650 | Steps: 876,000 | FPS: 255 | Reward: 35.9±23.9 | Loss: -0.1512 | Ent: 0.100
+Update 73/650 | Steps: 888,000 | FPS: 255 | Reward: 28.6±22.0 | Loss: -0.1478 | Ent: 0.100
+Update 74/650 | Steps: 900,000 | FPS: 256 | Reward: 26.6±19.8 | Loss: -0.1380 | Ent: 0.100
+Update 75/650 | Steps: 912,000 | FPS: 256 | Reward: 34.7±24.7 | Loss: -0.1329 | Ent: 0.100
+Update 76/650 | Steps: 924,000 | FPS: 256 | Reward: 48.4±27.9 | Loss: -0.1229 | Ent: 0.100
+Update 77/650 | Steps: 936,000 | FPS: 256 | Reward: 64.3±25.5 | Loss: -0.1270 | Ent: 0.100
+Update 78/650 | Steps: 948,000 | FPS: 256 | Reward: 78.7±23.6 | Loss: -0.1065 | Ent: 0.100
+Update 79/650 | Steps: 960,000 | FPS: 256 | Reward: 92.8±23.1 | Loss: -0.1006 | Ent: 0.100
+Update 80/650 | Steps: 972,000 | FPS: 256 | Reward: 108.8±24.8 | Loss: -0.0796 | Ent: 0.100
+Update 81/650 | Steps: 984,000 | FPS: 256 | Reward: 118.4±29.5 | Loss: -0.0860 | Ent: 0.100
+Update 82/650 | Steps: 996,000 | FPS: 256 | Reward: 129.1±39.5 | Loss: -0.0794 | Ent: 0.100
+Update 83/650 | Steps: 1,008,000 | FPS: 255 | Reward: 136.4±49.0 | Loss: -0.0960 | Ent: 0.100
+Update 84/650 | Steps: 1,020,000 | FPS: 256 | Reward: 137.4±58.1 | Loss: -0.1000 | Ent: 0.100
+Update 85/650 | Steps: 1,032,000 | FPS: 256 | Reward: 150.7±64.7 | Loss: -0.0948 | Ent: 0.100
+Update 86/650 | Steps: 1,044,000 | FPS: 256 | Reward: 159.0±67.5 | Loss: -0.0961 | Ent: 0.100
+Update 87/650 | Steps: 1,056,000 | FPS: 256 | Reward: 170.9±66.6 | Loss: -0.1043 | Ent: 0.100
+Update 88/650 | Steps: 1,068,000 | FPS: 256 | Reward: 164.4±67.1 | Loss: -0.1095 | Ent: 0.100
+Update 89/650 | Steps: 1,080,000 | FPS: 256 | Reward: 166.8±68.9 | Loss: -0.0920 | Ent: 0.100
+Update 90/650 | Steps: 1,092,000 | FPS: 256 | Reward: 170.2±71.4 | Loss: -0.1023 | Ent: 0.100
+Update 91/650 | Steps: 1,104,000 | FPS: 256 | Reward: 177.5±69.0 | Loss: -0.1110 | Ent: 0.100
+Update 92/650 | Steps: 1,116,000 | FPS: 256 | Reward: 176.3±68.3 | Loss: -0.1013 | Ent: 0.100
+Update 93/650 | Steps: 1,128,000 | FPS: 256 | Reward: 174.9±63.8 | Loss: -0.0940 | Ent: 0.100
+Update 94/650 | Steps: 1,140,000 | FPS: 256 | Reward: 177.1±62.0 | Loss: -0.1069 | Ent: 0.100
+Update 95/650 | Steps: 1,152,000 | FPS: 256 | Reward: 159.5±61.5 | Loss: -0.1202 | Ent: 0.100
+Update 96/650 | Steps: 1,164,000 | FPS: 256 | Reward: 150.2±62.2 | Loss: -0.1023 | Ent: 0.100
+Update 97/650 | Steps: 1,176,000 | FPS: 256 | Reward: 132.9±56.2 | Loss: -0.1113 | Ent: 0.100
+Update 98/650 | Steps: 1,188,000 | FPS: 256 | Reward: 131.5±55.3 | Loss: -0.1003 | Ent: 0.100
+Update 99/650 | Steps: 1,200,000 | FPS: 256 | Reward: 137.8±55.1 | Loss: -0.1046 | Ent: 0.100
+Update 100/650 | Steps: 1,212,000 | FPS: 256 | Reward: 157.0±61.1 | Loss: -0.0926 | Ent: 0.100
+Saved checkpoint to results/ppo_sp/ppo_sp_asymmetric_advantages_seed0/checkpoint_000100
+Update 101/650 | Steps: 1,224,000 | FPS: 256 | Reward: 178.2±63.8 | Loss: -0.0895 | Ent: 0.100
+Update 102/650 | Steps: 1,236,000 | FPS: 256 | Reward: 204.8±66.9 | Loss: -0.0746 | Ent: 0.100
+Update 103/650 | Steps: 1,248,000 | FPS: 256 | Reward: 231.3±60.3 | Loss: -0.0731 | Ent: 0.100
+Update 104/650 | Steps: 1,260,000 | FPS: 256 | Reward: 200.7±91.8 | Loss: -0.0914 | Ent: 0.100
+Update 105/650 | Steps: 1,272,000 | FPS: 256 | Reward: 202.5±96.4 | Loss: -0.0837 | Ent: 0.100
+Update 106/650 | Steps: 1,284,000 | FPS: 256 | Reward: 188.8±100.8 | Loss: -0.1139 | Ent: 0.100
+Update 107/650 | Steps: 1,296,000 | FPS: 256 | Reward: 210.8±90.6 | Loss: -0.0717 | Ent: 0.100
+Update 108/650 | Steps: 1,308,000 | FPS: 256 | Reward: 234.9±79.5 | Loss: -0.0809 | Ent: 0.100
+Update 109/650 | Steps: 1,320,000 | FPS: 256 | Reward: 240.6±78.4 | Loss: -0.0913 | Ent: 0.100
+Update 110/650 | Steps: 1,332,000 | FPS: 256 | Reward: 258.1±59.6 | Loss: -0.0729 | Ent: 0.100
+Update 111/650 | Steps: 1,344,000 | FPS: 256 | Reward: 262.3±52.9 | Loss: -0.0815 | Ent: 0.100
+Update 112/650 | Steps: 1,356,000 | FPS: 256 | Reward: 256.8±50.1 | Loss: -0.0715 | Ent: 0.100
+Update 113/650 | Steps: 1,368,000 | FPS: 256 | Reward: 259.9±41.6 | Loss: -0.0862 | Ent: 0.100
+Update 114/650 | Steps: 1,380,000 | FPS: 256 | Reward: 264.4±38.5 | Loss: -0.0776 | Ent: 0.100
+Update 115/650 | Steps: 1,392,000 | FPS: 256 | Reward: 271.3±34.0 | Loss: -0.0860 | Ent: 0.100
+Update 116/650 | Steps: 1,404,000 | FPS: 256 | Reward: 274.1±30.9 | Loss: -0.0819 | Ent: 0.100
+Update 117/650 | Steps: 1,416,000 | FPS: 256 | Reward: 275.7±28.4 | Loss: -0.0756 | Ent: 0.100
+Update 118/650 | Steps: 1,428,000 | FPS: 256 | Reward: 277.9±26.3 | Loss: -0.0727 | Ent: 0.100
+Update 119/650 | Steps: 1,440,000 | FPS: 256 | Reward: 281.1±26.8 | Loss: -0.0706 | Ent: 0.100
+Update 120/650 | Steps: 1,452,000 | FPS: 256 | Reward: 286.4±23.1 | Loss: -0.0768 | Ent: 0.100
+Update 121/650 | Steps: 1,464,000 | FPS: 256 | Reward: 287.5±23.8 | Loss: -0.0687 | Ent: 0.100
+Update 122/650 | Steps: 1,476,000 | FPS: 256 | Reward: 289.8±10.7 | Loss: -0.0695 | Ent: 0.100
+Update 123/650 | Steps: 1,488,000 | FPS: 256 | Reward: 289.7±13.9 | Loss: -0.0646 | Ent: 0.100
+Update 124/650 | Steps: 1,500,000 | FPS: 256 | Reward: 226.2±106.0 | Loss: -0.0628 | Ent: 0.100
+Update 125/650 | Steps: 1,512,000 | FPS: 256 | Reward: 194.9±110.4 | Loss: -0.0780 | Ent: 0.100
+Update 126/650 | Steps: 1,524,000 | FPS: 256 | Reward: 169.8±109.7 | Loss: -0.0568 | Ent: 0.100
+Update 127/650 | Steps: 1,536,000 | FPS: 256 | Reward: 210.9±97.3 | Loss: -0.0751 | Ent: 0.100
+Update 128/650 | Steps: 1,548,000 | FPS: 256 | Reward: 244.7±82.0 | Loss: -0.0749 | Ent: 0.100
+Update 129/650 | Steps: 1,560,000 | FPS: 256 | Reward: 266.8±57.9 | Loss: -0.0652 | Ent: 0.100
+Update 130/650 | Steps: 1,572,000 | FPS: 256 | Reward: 277.9±40.9 | Loss: -0.0718 | Ent: 0.100
+Update 131/650 | Steps: 1,584,000 | FPS: 256 | Reward: 279.1±33.5 | Loss: -0.0720 | Ent: 0.100
+Update 132/650 | Steps: 1,596,000 | FPS: 256 | Reward: 281.4±31.5 | Loss: -0.0719 | Ent: 0.100
+Update 133/650 | Steps: 1,608,000 | FPS: 256 | Reward: 287.4±11.7 | Loss: -0.0626 | Ent: 0.100
+Update 134/650 | Steps: 1,620,000 | FPS: 257 | Reward: 288.2±8.6 | Loss: -0.0867 | Ent: 0.100
+Update 135/650 | Steps: 1,632,000 | FPS: 257 | Reward: 276.7±28.9 | Loss: -0.1165 | Ent: 0.100
+Update 136/650 | Steps: 1,644,000 | FPS: 257 | Reward: 268.6±30.0 | Loss: -0.0925 | Ent: 0.100
+Update 137/650 | Steps: 1,656,000 | FPS: 257 | Reward: 266.1±29.2 | Loss: -0.0934 | Ent: 0.100
+Update 138/650 | Steps: 1,668,000 | FPS: 257 | Reward: 269.4±21.9 | Loss: -0.0801 | Ent: 0.100
+Update 139/650 | Steps: 1,680,000 | FPS: 257 | Reward: 271.3±20.7 | Loss: -0.0869 | Ent: 0.100
+Update 140/650 | Steps: 1,692,000 | FPS: 257 | Reward: 266.9±21.1 | Loss: -0.1031 | Ent: 0.100
+Update 141/650 | Steps: 1,704,000 | FPS: 257 | Reward: 261.3±23.0 | Loss: -0.0872 | Ent: 0.100
+
+Early stopping: No improvement for 20 updates
+Best mean reward: 289.77
+Saved checkpoint to results/ppo_sp/ppo_sp_asymmetric_advantages_seed0/checkpoint_000650
+
+Training completed in 6687.1s
+Final mean reward: 259.70
+Best mean reward: 289.77
+Total episodes: 4290
+
+############################################################
+# Run 3/5: coordination_ring (seed=0)
+############################################################
+
+============================================================
+Training PPO Self-Play Agent
+============================================================
+Layout: coordination_ring -> coordination_ring
+Seed: 0
+Total timesteps: 7,800,000
+Learning rate: 0.00016
+Gamma: 0.975
+Clip epsilon: 0.069
+Results dir: results/ppo_sp
+============================================================
+
+Starting PPO training for 7800000 timesteps
+Layout: coordination_ring
+Num envs: 30, Num steps: 400
+Batch size: 12000
+Early stop patience: 20 updates
+Update 0/650 | Steps: 12,000 | FPS: 260 | Reward: 2.0±2.6 | Loss: -0.3540 | Ent: 0.196
+Saved checkpoint to results/ppo_sp/ppo_sp_coordination_ring_seed0/checkpoint_000000
+Update 1/650 | Steps: 24,000 | FPS: 267 | Reward: 1.8±2.4 | Loss: -0.3466 | Ent: 0.192
+Update 2/650 | Steps: 36,000 | FPS: 269 | Reward: 2.4±3.0 | Loss: -0.3402 | Ent: 0.188
+Update 3/650 | Steps: 48,000 | FPS: 270 | Reward: 2.5±3.2 | Loss: -0.3332 | Ent: 0.184
+Update 4/650 | Steps: 60,000 | FPS: 271 | Reward: 3.1±3.3 | Loss: -0.3269 | Ent: 0.180
+Update 5/650 | Steps: 72,000 | FPS: 271 | Reward: 3.5±3.4 | Loss: -0.3194 | Ent: 0.176
+Update 6/650 | Steps: 84,000 | FPS: 272 | Reward: 3.9±3.4 | Loss: -0.3145 | Ent: 0.172
+Update 7/650 | Steps: 96,000 | FPS: 272 | Reward: 4.0±3.5 | Loss: -0.3060 | Ent: 0.168
+Update 8/650 | Steps: 108,000 | FPS: 272 | Reward: 4.1±3.8 | Loss: -0.2971 | Ent: 0.164
+Update 9/650 | Steps: 120,000 | FPS: 272 | Reward: 3.4±3.7 | Loss: -0.2920 | Ent: 0.160
+Update 10/650 | Steps: 132,000 | FPS: 273 | Reward: 3.0±3.6 | Loss: -0.2856 | Ent: 0.156
+Update 11/650 | Steps: 144,000 | FPS: 273 | Reward: 2.8±3.7 | Loss: -0.2697 | Ent: 0.152
+Update 12/650 | Steps: 156,000 | FPS: 273 | Reward: 2.7±3.7 | Loss: -0.2627 | Ent: 0.148
+Update 13/650 | Steps: 168,000 | FPS: 273 | Reward: 2.2±3.3 | Loss: -0.2517 | Ent: 0.144
+Update 14/650 | Steps: 180,000 | FPS: 273 | Reward: 1.6±2.6 | Loss: -0.2396 | Ent: 0.140
+Update 15/650 | Steps: 192,000 | FPS: 274 | Reward: 1.4±2.4 | Loss: -0.2312 | Ent: 0.136
+Update 16/650 | Steps: 204,000 | FPS: 274 | Reward: 1.6±2.6 | Loss: -0.2241 | Ent: 0.132
+Update 17/650 | Steps: 216,000 | FPS: 274 | Reward: 1.5±2.7 | Loss: -0.2213 | Ent: 0.128
+Update 18/650 | Steps: 228,000 | FPS: 274 | Reward: 1.4±2.6 | Loss: -0.2107 | Ent: 0.124
+Update 19/650 | Steps: 240,000 | FPS: 274 | Reward: 1.4±2.4 | Loss: -0.2043 | Ent: 0.120
+Update 20/650 | Steps: 252,000 | FPS: 274 | Reward: 1.6±2.5 | Loss: -0.2002 | Ent: 0.116
+Update 21/650 | Steps: 264,000 | FPS: 274 | Reward: 1.2±2.0 | Loss: -0.1914 | Ent: 0.112
+Update 22/650 | Steps: 276,000 | FPS: 274 | Reward: 0.9±1.8 | Loss: -0.1895 | Ent: 0.108
+Update 23/650 | Steps: 288,000 | FPS: 274 | Reward: 0.6±1.5 | Loss: -0.1782 | Ent: 0.104
+Update 24/650 | Steps: 300,000 | FPS: 274 | Reward: 0.4±1.1 | Loss: -0.1704 | Ent: 0.100
+Update 25/650 | Steps: 312,000 | FPS: 274 | Reward: 0.3±0.9 | Loss: -0.1797 | Ent: 0.100
+Update 26/650 | Steps: 324,000 | FPS: 274 | Reward: 0.2±1.0 | Loss: -0.1700 | Ent: 0.100
+Update 27/650 | Steps: 336,000 | FPS: 275 | Reward: 0.1±0.8 | Loss: -0.1790 | Ent: 0.100
+
+Early stopping: No improvement for 20 updates
+Best mean reward: 4.05
+Saved checkpoint to results/ppo_sp/ppo_sp_coordination_ring_seed0/checkpoint_000650
+
+Training completed in 1267.3s
+Final mean reward: 0.19
+Best mean reward: 4.05
+Total episodes: 870
+
+############################################################
+# Run 4/5: forced_coordination (seed=0)
+############################################################
+
+============================================================
+Training PPO Self-Play Agent
+============================================================
+Layout: forced_coordination -> forced_coordination
+Seed: 0
+Total timesteps: 7,800,000
+Learning rate: 0.000277
+Gamma: 0.972
+Clip epsilon: 0.258
+Results dir: results/ppo_sp
+============================================================
+
+Starting PPO training for 7800000 timesteps
+Layout: forced_coordination
+Num envs: 30, Num steps: 400
+Batch size: 12000
+Early stop patience: 20 updates
+Update 0/650 | Steps: 12,000 | FPS: 274 | Reward: 3.0±2.4 | Loss: -0.3587 | Ent: 0.196
+Saved checkpoint to results/ppo_sp/ppo_sp_forced_coordination_seed0/checkpoint_000000
+Update 1/650 | Steps: 24,000 | FPS: 273 | Reward: 3.6±2.6 | Loss: -0.3530 | Ent: 0.192
+Update 2/650 | Steps: 36,000 | FPS: 273 | Reward: 3.9±3.2 | Loss: -0.3487 | Ent: 0.188
+Update 3/650 | Steps: 48,000 | FPS: 273 | Reward: 4.8±3.2 | Loss: -0.3390 | Ent: 0.184
+Update 4/650 | Steps: 60,000 | FPS: 273 | Reward: 5.4±3.2 | Loss: -0.3339 | Ent: 0.180
+Update 5/650 | Steps: 72,000 | FPS: 273 | Reward: 5.5±3.0 | Loss: -0.3246 | Ent: 0.176
+Update 6/650 | Steps: 84,000 | FPS: 273 | Reward: 5.7±2.8 | Loss: -0.3046 | Ent: 0.172
+Update 7/650 | Steps: 96,000 | FPS: 273 | Reward: 6.0±3.0 | Loss: -0.2962 | Ent: 0.168
+Update 8/650 | Steps: 108,000 | FPS: 273 | Reward: 6.4±3.4 | Loss: -0.2954 | Ent: 0.164
+Update 9/650 | Steps: 120,000 | FPS: 273 | Reward: 6.9±3.7 | Loss: -0.2770 | Ent: 0.160
+Update 10/650 | Steps: 132,000 | FPS: 273 | Reward: 7.0±5.0 | Loss: -0.2618 | Ent: 0.156
+Update 11/650 | Steps: 144,000 | FPS: 273 | Reward: 7.3±5.2 | Loss: -0.2620 | Ent: 0.152
+Update 12/650 | Steps: 156,000 | FPS: 273 | Reward: 7.1±5.1 | Loss: -0.2458 | Ent: 0.148
+Update 13/650 | Steps: 168,000 | FPS: 273 | Reward: 7.0±4.6 | Loss: -0.2403 | Ent: 0.144
+Update 14/650 | Steps: 180,000 | FPS: 273 | Reward: 6.7±4.8 | Loss: -0.2398 | Ent: 0.140
+Update 15/650 | Steps: 192,000 | FPS: 273 | Reward: 6.1±4.9 | Loss: -0.2328 | Ent: 0.136
+Update 16/650 | Steps: 204,000 | FPS: 273 | Reward: 5.0±5.0 | Loss: -0.2391 | Ent: 0.132
+Update 17/650 | Steps: 216,000 | FPS: 273 | Reward: 4.3±4.8 | Loss: -0.2349 | Ent: 0.128
+Update 18/650 | Steps: 228,000 | FPS: 273 | Reward: 3.4±4.2 | Loss: -0.2288 | Ent: 0.124
+Update 19/650 | Steps: 240,000 | FPS: 274 | Reward: 2.9±3.5 | Loss: -0.2242 | Ent: 0.120
+Update 20/650 | Steps: 252,000 | FPS: 274 | Reward: 3.7±4.1 | Loss: -0.2068 | Ent: 0.116
+Update 21/650 | Steps: 264,000 | FPS: 274 | Reward: 4.2±4.0 | Loss: -0.1994 | Ent: 0.112
+Update 22/650 | Steps: 276,000 | FPS: 274 | Reward: 4.6±3.8 | Loss: -0.1942 | Ent: 0.108
+Update 23/650 | Steps: 288,000 | FPS: 274 | Reward: 4.8±3.7 | Loss: -0.1845 | Ent: 0.104
+Update 24/650 | Steps: 300,000 | FPS: 274 | Reward: 5.6±3.9 | Loss: -0.1704 | Ent: 0.100
+Update 25/650 | Steps: 312,000 | FPS: 274 | Reward: 5.4±3.7 | Loss: -0.1755 | Ent: 0.100
+Update 26/650 | Steps: 324,000 | FPS: 274 | Reward: 5.4±3.8 | Loss: -0.1699 | Ent: 0.100
+Update 27/650 | Steps: 336,000 | FPS: 274 | Reward: 5.1±3.5 | Loss: -0.1738 | Ent: 0.100
+Update 28/650 | Steps: 348,000 | FPS: 274 | Reward: 5.4±3.4 | Loss: -0.1630 | Ent: 0.100
+Update 29/650 | Steps: 360,000 | FPS: 274 | Reward: 6.0±3.3 | Loss: -0.1647 | Ent: 0.100
+Update 30/650 | Steps: 372,000 | FPS: 274 | Reward: 6.2±3.0 | Loss: -0.1657 | Ent: 0.100
+
+Early stopping: No improvement for 20 updates
+Best mean reward: 7.26
+Saved checkpoint to results/ppo_sp/ppo_sp_forced_coordination_seed0/checkpoint_000650
+
+Training completed in 1401.3s
+Final mean reward: 5.76
+Best mean reward: 7.26
+Total episodes: 960
+
+############################################################
+# Run 5/5: counter_circuit (seed=0)
+############################################################
+
+============================================================
+Training PPO Self-Play Agent
+============================================================
+Layout: counter_circuit -> counter_circuit_o_1order
+Seed: 0
+Total timesteps: 7,800,000
+Learning rate: 0.000229
+Gamma: 0.978
+Clip epsilon: 0.146
+Results dir: results/ppo_sp
+============================================================
+
+Starting PPO training for 7800000 timesteps
+Layout: counter_circuit_o_1order
+Num envs: 30, Num steps: 400
+Batch size: 12000
+Early stop patience: 20 updates
+Update 0/650 | Steps: 12,000 | FPS: 250 | Reward: 0.2±0.7 | Loss: -0.3501 | Ent: 0.196
+Saved checkpoint to results/ppo_sp/ppo_sp_counter_circuit_seed0/checkpoint_000000
+Update 1/650 | Steps: 24,000 | FPS: 257 | Reward: 0.1±0.7 | Loss: -0.3497 | Ent: 0.192
+Update 2/650 | Steps: 36,000 | FPS: 259 | Reward: 0.1±0.6 | Loss: -0.3493 | Ent: 0.188
+Update 3/650 | Steps: 48,000 | FPS: 261 | Reward: 0.1±0.6 | Loss: -0.3574 | Ent: 0.184
+Update 4/650 | Steps: 60,000 | FPS: 262 | Reward: 0.1±0.6 | Loss: -0.3350 | Ent: 0.180
+Update 5/650 | Steps: 72,000 | FPS: 262 | Reward: 0.3±1.1 | Loss: -0.3389 | Ent: 0.176
+Update 6/650 | Steps: 84,000 | FPS: 263 | Reward: 0.4±1.3 | Loss: -0.3156 | Ent: 0.172
+Update 7/650 | Steps: 96,000 | FPS: 264 | Reward: 0.6±1.6 | Loss: -0.2954 | Ent: 0.168
+Update 8/650 | Steps: 108,000 | FPS: 267 | Reward: 0.9±1.9 | Loss: -0.2888 | Ent: 0.164
+Update 9/650 | Steps: 120,000 | FPS: 269 | Reward: 1.0±2.0 | Loss: -0.2804 | Ent: 0.160
+Update 10/650 | Steps: 132,000 | FPS: 271 | Reward: 1.0±2.0 | Loss: -0.2730 | Ent: 0.156
+Update 11/650 | Steps: 144,000 | FPS: 272 | Reward: 0.9±1.9 | Loss: -0.2645 | Ent: 0.152
+Update 12/650 | Steps: 156,000 | FPS: 273 | Reward: 1.0±2.1 | Loss: -0.2630 | Ent: 0.148
+Update 13/650 | Steps: 168,000 | FPS: 274 | Reward: 1.0±2.0 | Loss: -0.2609 | Ent: 0.144
+Update 14/650 | Steps: 180,000 | FPS: 275 | Reward: 0.9±2.0 | Loss: -0.2451 | Ent: 0.140
+Update 15/650 | Steps: 192,000 | FPS: 276 | Reward: 0.6±1.3 | Loss: -0.2568 | Ent: 0.136
+Update 16/650 | Steps: 204,000 | FPS: 277 | Reward: 0.4±1.2 | Loss: -0.2473 | Ent: 0.132
+Update 17/650 | Steps: 216,000 | FPS: 278 | Reward: 0.2±0.8 | Loss: -0.2443 | Ent: 0.128
+Update 18/650 | Steps: 228,000 | FPS: 278 | Reward: 0.1±0.5 | Loss: -0.2349 | Ent: 0.124
+Update 19/650 | Steps: 240,000 | FPS: 279 | Reward: 0.1±0.7 | Loss: -0.2123 | Ent: 0.120
+Update 20/650 | Steps: 252,000 | FPS: 279 | Reward: 0.1±0.7 | Loss: -0.2094 | Ent: 0.116
+Update 21/650 | Steps: 264,000 | FPS: 280 | Reward: 0.2±0.8 | Loss: -0.1989 | Ent: 0.112
+Update 22/650 | Steps: 276,000 | FPS: 280 | Reward: 0.1±0.6 | Loss: -0.1788 | Ent: 0.108
+Update 23/650 | Steps: 288,000 | FPS: 280 | Reward: 0.1±0.6 | Loss: -0.1749 | Ent: 0.104
+Update 24/650 | Steps: 300,000 | FPS: 281 | Reward: 0.1±0.4 | Loss: -0.1867 | Ent: 0.100
+Update 25/650 | Steps: 312,000 | FPS: 281 | Reward: 0.1±0.4 | Loss: -0.1777 | Ent: 0.100
+Update 26/650 | Steps: 324,000 | FPS: 281 | Reward: 0.1±0.6 | Loss: -0.1582 | Ent: 0.100
+Update 27/650 | Steps: 336,000 | FPS: 282 | Reward: 0.2±0.8 | Loss: -0.1543 | Ent: 0.100
+Update 28/650 | Steps: 348,000 | FPS: 282 | Reward: 0.3±1.1 | Loss: -0.1630 | Ent: 0.100
+Update 29/650 | Steps: 360,000 | FPS: 282 | Reward: 0.4±1.4 | Loss: -0.1490 | Ent: 0.100
+
+Early stopping: No improvement for 20 updates
+Best mean reward: 1.01
+Saved checkpoint to results/ppo_sp/ppo_sp_counter_circuit_seed0/checkpoint_000650
+
+Training completed in 1317.3s
+Final mean reward: 0.48
+Best mean reward: 1.01
+Total episodes: 930
+
+============================================================
+TRAINING SUMMARY
+============================================================
+
+cramped_room:
+----------------------------------------
+  Seed 0: 660,000 timesteps completed
+
+asymmetric_advantages:
+----------------------------------------
+  Seed 0: 1,716,000 timesteps completed
+
+coordination_ring:
+----------------------------------------
+  Seed 0: 348,000 timesteps completed
+
+forced_coordination:
+----------------------------------------
+  Seed 0: 384,000 timesteps completed
+
+counter_circuit:
+----------------------------------------
+  Seed 0: 372,000 timesteps completed
