@@ -59,15 +59,9 @@ STRICT_SP_PARITY_KEYS = {
     "entropy_coeff_start": 0.1,
     "entropy_coeff_end": 0.1,
     "cliprange_schedule": "constant",
-}
-
-# Canonical key translation from paper config dict to PPOConfig fields.
-PAPER_TO_PPO_FIELD_MAP = {
-    "num_workers": "num_envs",
-    "rollout_fragment_length": "num_steps",
-    "num_sgd_iter": "num_epochs",
-    "evaluation_interval": "eval_interval",
-    "evaluation_num_games": "eval_num_games",
+    # NOTE: strict parity here follows the TF1 ground-truth codepath,
+    # which uses hidden size 64 in practice.
+    "hidden_dim": 64,
 }
 
 ALLOWED_PAPER_KEYS = {

@@ -37,6 +37,8 @@ LAYOUT_TO_ENV = {
 PAPER_COMMON_PARAMS = {
     # Network architecture
     "num_hidden_layers": 3,
+    # Ground-truth TF1 implementation uses 64 hidden units in practice.
+    # Keep this for code parity even though appendix text has reported 32.
     "hidden_dim": 64,
     "num_filters": 25,
     "num_conv_layers": 3,
