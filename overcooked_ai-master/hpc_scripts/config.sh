@@ -5,16 +5,18 @@
 # This file contains shared configuration for all training scripts.
 # Source this file at the beginning of each training script.
 #
-# SETUP: Update the following before running on your cluster:
-#   1. PROJECT_ROOT - path to your cloned repo
-#   2. setup_conda() - how to activate your conda environment
+# SETUP:
+#   1. Optionally set PROJECT_ROOT before sourcing (auto-detected by default)
+#   2. Optionally set CONDA_ENV_PATH or CONDA_ENV_NAME
+#      (defaults: $HOME/.conda/envs/overcooked)
 # ============================================================================
 
-# Project paths - UPDATE THIS to your clone location
-export PROJECT_ROOT="$HOME/home/overcooked_ai"
-export HUMAN_AWARE_RL_DIR="${PROJECT_ROOT}/src/human_aware_rl"
-export HPC_SCRIPTS_DIR="${PROJECT_ROOT}/hpc_scripts"
-export LOGS_DIR="${HPC_SCRIPTS_DIR}/logs"
+# Project paths (portable defaults)
+CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${CONFIG_DIR}/.." && pwd)}"
+export HUMAN_AWARE_RL_DIR="${HUMAN_AWARE_RL_DIR:-${PROJECT_ROOT}/src/human_aware_rl}"
+export HPC_SCRIPTS_DIR="${HPC_SCRIPTS_DIR:-${PROJECT_ROOT}/hpc_scripts}"
+export LOGS_DIR="${LOGS_DIR:-${HPC_SCRIPTS_DIR}/logs}"
 
 # Results directories (relative to HUMAN_AWARE_RL_DIR)
 export RESULTS_DIR="${HUMAN_AWARE_RL_DIR}/results"
@@ -22,10 +24,17 @@ export BC_RESULTS_DIR="${HUMAN_AWARE_RL_DIR}/bc_runs"
 
 # Conda environment setup
 # Directly prepend the conda env bin to PATH.
-# This bypasses 'module load' and 'conda activate' which don't work on compute nodes.
+# This bypasses 'module load' and 'conda activate' which often fail on compute nodes.
+export CONDA_ENV_NAME="${CONDA_ENV_NAME:-overcooked}"
+export CONDA_ENV_PATH="${CONDA_ENV_PATH:-$HOME/.conda/envs/${CONDA_ENV_NAME}}"
 setup_conda() {
-    export PATH="$HOME/.conda/envs/overcooked/bin:$PATH"
-    export CONDA_DEFAULT_ENV="overcooked"
+    if [ -d "${CONDA_ENV_PATH}/bin" ]; then
+        export PATH="${CONDA_ENV_PATH}/bin:$PATH"
+        export CONDA_DEFAULT_ENV="${CONDA_ENV_NAME}"
+    else
+        echo "WARNING: CONDA_ENV_PATH not found: ${CONDA_ENV_PATH}"
+        echo "         Set CONDA_ENV_PATH or CONDA_ENV_NAME before running."
+    fi
 }
 
 # Call setup automatically when sourced

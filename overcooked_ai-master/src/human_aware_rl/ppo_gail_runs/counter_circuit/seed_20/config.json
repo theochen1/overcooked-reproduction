@@ -39,5 +39,5 @@
   "early_stop_patience": 100,
   "seed": 20,
   "experiment_name": "ppo_gail_counter_circuit_seed20",
-  "results_dir": "/om/scratch/Mon/mabdel03/6.S890/overcooked_ai/src/human_aware_rl/results/ppo_gail"
+  "results_dir": "results/ppo_gail"
 }

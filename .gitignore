@@ -1,0 +1,72 @@
+# ---------------------------------------------------------------------------
+# Repository-wide ignores for generated artifacts (keep implementation code)
+# ---------------------------------------------------------------------------
+
+# OS / editor
+.DS_Store
+.cursor/
+**/.vscode/
+**/.idea/
+*~
+*.swp
+
+# Python cache / build
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ipynb_checkpoints/
+*.py[cod]
+*.so
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# ---------------------------------------------------------------------------
+# Large training outputs, logs, checkpoints, and experiment artifacts
+# ---------------------------------------------------------------------------
+
+# Root-level generated folders
+data/
+logs/
+ground_truth_runs/
+parity_artifacts/
+
+# Project-generated run folders anywhere in repo
+**/logs/
+**/results/
+**/checkpoints/
+**/wandb/
+**/ray_results/
+**/runs/
+**/ppo_runs/
+**/pbt_runs/
+**/bc_runs/
+**/gail_runs/
+**/ppo_sp_runs/
+**/ppo_bc_runs/
+**/ppo_gail_runs/
+
+# SLURM / cluster outputs
+**/slurm-*.out
+**/slurm-*.err
+*.out
+*.err
+
+# Model and checkpoint binaries
+*.ckpt
+*.ckpt.*
+*.pt
+*.pth
+*.h5
+*.hdf5
+*.npz
+*.npy
+
+# Compressed archives from experiments
+*.tar
+*.tar.gz
+*.tgz
+*.zip

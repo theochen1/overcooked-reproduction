@@ -1,0 +1,95 @@
+Bootstrap: docker
+From: ubuntu:18.04
+
+%files
+    ../ /opt/human_aware_rl
+
+%labels
+    Author tchen22
+    Description "human_aware_rl legacy TF1 container for HPC"
+
+%help
+    Build:
+      apptainer build --fakeroot --mksquashfs-args "-processors 1" \
+        /path/to/harl_tf1.sif hpc_scripts/harl_apptainer.def
+
+    Run:
+      apptainer exec /path/to/harl_tf1.sif \
+        python -c "import tensorflow as tf; print(tf.__version__)"
+
+%environment
+    export PATH=/opt/conda/bin:$PATH
+    export PYTHONPATH=/opt/human_aware_rl:/opt/human_aware_rl/overcooked_ai
+    export LC_ALL=C
+
+%post
+    # %post executes with /bin/sh, so keep options POSIX-safe.
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update && apt-get install -y \
+        ca-certificates \
+        python3.7 \
+        python3.7-dev \
+        python3-pip \
+        git \
+        wget \
+        build-essential \
+        libopenmpi-dev \
+        openmpi-bin \
+        libsdl1.2-dev \
+        libsdl-image1.2-dev \
+        libsdl-mixer1.2-dev \
+        libsdl-ttf2.0-dev \
+        nodejs \
+        npm \
+        && rm -rf /var/lib/apt/lists/*
+    npm install -g yarn
+
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.7 1
+    update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
+    pip install --upgrade pip==19.3.1 setuptools==42.0.0 wheel
+
+    wget https://repo.anaconda.com/miniconda/Miniconda3-py37_4.8.3-Linux-x86_64.sh -O /tmp/miniconda.sh
+    bash /tmp/miniconda.sh -b -p /opt/conda
+    rm -f /tmp/miniconda.sh
+
+    . /opt/conda/etc/profile.d/conda.sh
+    conda create -n harl python=3.7 -y
+    conda activate harl
+
+    # Critical TF1 compatibility pins.
+    pip install tensorflow==1.13.1
+    pip install "protobuf>=3.6.0,<3.20"
+    pip install \
+        numpy==1.16.4 \
+        pymongo==3.9.0 \
+        pandas==1.0.5 \
+        matplotlib==3.0.3 \
+        seaborn==0.9.0 \
+        pygame==1.9.6 \
+        smmap2==2.0.5 \
+        gitdb2==2.0.6 \
+        GitPython==3.0.5 \
+        memory-profiler==0.57.0 \
+        sacred==0.7.4 \
+        joblib==1.1.0 \
+        cloudpickle==1.6.0
+
+    # Install local editable packages from the embedded source tree.
+    cd /opt/human_aware_rl
+    chmod +x install.sh
+    ./install.sh || true
+    pip install --force-reinstall --no-deps tensorflow==1.13.1
+    pip install "protobuf>=3.6.0,<3.20"
+    pip install joblib==1.1.0 cloudpickle==1.6.0
+
+    # As in README guidance.
+    conda install mpi4py==3.0.3 -y
+
+    echo "source /opt/conda/etc/profile.d/conda.sh" >> /root/.bashrc
+    echo "conda activate harl" >> /root/.bashrc
+    echo "export PYTHONPATH=/opt/human_aware_rl:/opt/human_aware_rl/overcooked_ai" >> /root/.bashrc
+
+%runscript
+    exec /bin/bash "$@"

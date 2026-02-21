@@ -10,7 +10,15 @@
 # PPO with GAIL Partner Training: cramped_room (seed=0)
 
 # HPC_CONFIG is set by submit scripts; fallback to HOME-based path
-source "${HPC_CONFIG:-$HOME/home/overcooked_ai/hpc_scripts/config.sh}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -f "${SLURM_SUBMIT_DIR}/config.sh" ]; then
+    DEFAULT_HPC_CONFIG="${SLURM_SUBMIT_DIR}/config.sh"
+elif [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -f "${SLURM_SUBMIT_DIR}/hpc_scripts/config.sh" ]; then
+    DEFAULT_HPC_CONFIG="${SLURM_SUBMIT_DIR}/hpc_scripts/config.sh"
+else
+    DEFAULT_HPC_CONFIG="$(cd "${SCRIPT_DIR}/.." && pwd)/config.sh"
+fi
+source "${HPC_CONFIG:-${DEFAULT_HPC_CONFIG}}"
 
 log_start
 

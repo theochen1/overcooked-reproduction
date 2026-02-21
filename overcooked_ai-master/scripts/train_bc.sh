@@ -8,11 +8,23 @@
 mkdir -p logs
 
 # Activate conda environment
-source /om2/user/mabdel03/anaconda/etc/profile.d/conda.sh
-conda activate /om/scratch/Mon/mabdel03/conda_envs/MAL_env
+# Environment bootstrap (portable across clusters)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-overcooked}"
+CONDA_ENV_PATH="${CONDA_ENV_PATH:-$HOME/.conda/envs/${CONDA_ENV_NAME}}"
+if [ -f "$HOME/.conda/etc/profile.d/conda.sh" ]; then
+    source "$HOME/.conda/etc/profile.d/conda.sh"
+fi
+if command -v conda >/dev/null 2>&1; then
+    conda activate "${CONDA_ENV_NAME}" || true
+fi
+if [ -d "${CONDA_ENV_PATH}/bin" ]; then
+    export PATH="${CONDA_ENV_PATH}/bin:$PATH"
+fi
+export PYTHONPATH="${PROJECT_ROOT}/src:${PYTHONPATH:-}"
+cd "${PROJECT_ROOT}/src/human_aware_rl"
 
-# Navigate to project
-cd $SLURM_SUBMIT_DIR/src/human_aware_rl
 
 # Train BC models for all layouts
 python -m human_aware_rl.imitation.train_bc_models --all_layouts

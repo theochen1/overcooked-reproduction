@@ -94,6 +94,9 @@ def train_ppo_sp(
         print(f"Gamma: {config_dict['gamma']}")
         print(f"GAE lambda: {config_dict['gae_lambda']}")
         print(f"Clip epsilon: {config_dict['clip_eps']}")
+        print(f"Clip epsilon end: {config_dict.get('clip_eps_end', 0.0)}")
+        print(f"Clip end fraction: {config_dict.get('clip_end_fraction', 1.0)}")
+        print(f"Cliprange schedule: {config_dict.get('cliprange_schedule', 'constant')}")
         print(f"Reward shaping horizon: {config_dict.get('reward_shaping_horizon', 2.5e6):.0e}")
         print(f"Legacy encoding: {config_dict.get('use_legacy_encoding', True)}")
         print(f"Old dynamics: {config_dict.get('old_dynamics', True)}")
@@ -158,6 +161,9 @@ def train_ppo_sp(
         gamma=config_dict["gamma"],
         gae_lambda=config_dict["gae_lambda"],
         clip_eps=config_dict["clip_eps"],
+        clip_eps_end=config_dict.get("clip_eps_end", 0.0),
+        clip_end_fraction=config_dict.get("clip_end_fraction", 1.0),
+        cliprange_schedule=config_dict.get("cliprange_schedule", "constant"),
         vf_coef=config_dict["vf_coef"],
         ent_coef=config_dict.get("entropy_coeff_start", 0.1),  # Original: ENTROPY=0.1
         max_grad_norm=config_dict["max_grad_norm"],
@@ -422,6 +428,31 @@ def main():
         action="store_true",
         help="Enable expensive per-loss-term gradient diagnostics"
     )
+    parser.add_argument(
+        "--cliprange_schedule",
+        type=str,
+        choices=["constant", "linear", "linear_to_end"],
+        default=None,
+        help="PPO cliprange schedule (Baselines-style)."
+    )
+    parser.add_argument(
+        "--clip_eps",
+        type=float,
+        default=None,
+        help="Override PPO clip epsilon start value."
+    )
+    parser.add_argument(
+        "--clip_eps_end",
+        type=float,
+        default=None,
+        help="Override PPO clip epsilon end value (used by linear_to_end)."
+    )
+    parser.add_argument(
+        "--clip_end_fraction",
+        type=float,
+        default=None,
+        help="Fraction of training to reach clip_eps_end for linear_to_end, then hold at end."
+    )
     
     args = parser.parse_args()
     
@@ -465,6 +496,14 @@ def main():
         local_overrides["verbose_debug"] = True
     if args.grad_diagnostics:
         local_overrides["grad_diagnostics"] = True
+    if args.cliprange_schedule is not None:
+        local_overrides["cliprange_schedule"] = args.cliprange_schedule
+    if args.clip_eps is not None:
+        local_overrides["clip_eps"] = args.clip_eps
+    if args.clip_eps_end is not None:
+        local_overrides["clip_eps_end"] = args.clip_eps_end
+    if args.clip_end_fraction is not None:
+        local_overrides["clip_end_fraction"] = args.clip_end_fraction
     
     if args.layout:
         # Train single layout

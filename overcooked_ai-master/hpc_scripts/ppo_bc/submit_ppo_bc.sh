@@ -5,6 +5,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HPC_DIR="$(dirname "${SCRIPT_DIR}")"
 LOGS_DIR="${HPC_DIR}/logs"
+HPC_CONFIG_PATH="${HPC_DIR}/config.sh"
 
 mkdir -p "${LOGS_DIR}"
 
@@ -15,6 +16,7 @@ COUNT=0
 for layout in cramped_room asymmetric_advantages coordination_ring forced_coordination counter_circuit; do
     for seed in 0 10 20 30 40; do
         JOB_ID=$(sbatch --parsable \
+            --export=ALL,HPC_CONFIG="${HPC_CONFIG_PATH}" \
             --output="${LOGS_DIR}/ppo_bc_${layout}_seed${seed}_%j.out" \
             --error="${LOGS_DIR}/ppo_bc_${layout}_seed${seed}_%j.err" \
             "${SCRIPT_DIR}/${layout}_seed${seed}.sh")

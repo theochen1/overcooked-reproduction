@@ -20,6 +20,8 @@ Key settings matching the paper:
 12. Glorot uniform weight init for conv/dense layers (not orthogonal)
 13. Leaky ReLU with negative_slope=0.2 (matching TensorFlow default)
 14. Stochastic action sampling in evaluation (matches training behavior)
+15. PPO-SP clip schedule uses the ablation-backed setting:
+    clip_eps_start=0.2, schedule=linear_to_end, clip_eps_end=0.02, clip_end_fraction=1.0
 
 Usage:
     cd overcooked_ai-master/src
@@ -89,6 +91,9 @@ def get_paper_reproduction_config(
         gamma=config_dict["gamma"],
         gae_lambda=config_dict["gae_lambda"],
         clip_eps=config_dict["clip_eps"],
+        clip_eps_end=config_dict.get("clip_eps_end", 0.0),
+        clip_end_fraction=config_dict.get("clip_end_fraction", 1.0),
+        cliprange_schedule=config_dict.get("cliprange_schedule", "constant"),
         ent_coef=config_dict.get("entropy_coeff_start", 0.01),
         vf_coef=config_dict["vf_coef"],
         max_grad_norm=config_dict["max_grad_norm"],
@@ -166,7 +171,10 @@ def train_layout(layout: str, seed: int, total_timesteps: int = None,
     print(f"  Learning rate: {config.learning_rate} (constant)")
     print(f"  Entropy coef: {config.ent_coef}")
     print(f"  VF coef: {config.vf_coef}")
-    print(f"  Clip epsilon: {config.clip_eps}")
+    print(f"  Clip epsilon (start): {config.clip_eps}")
+    print(f"  Clip schedule: {config.cliprange_schedule}")
+    print(f"  Clip epsilon end: {config.clip_eps_end}")
+    print(f"  Clip end fraction: {config.clip_end_fraction}")
     print(f"  Max grad norm: {config.max_grad_norm}")
     print(f"  GAE lambda: {config.gae_lambda}")
     print(f"  Gamma: {config.gamma}")

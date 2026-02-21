@@ -5,6 +5,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HPC_DIR="$(dirname "${SCRIPT_DIR}")"
 LOGS_DIR="${HPC_DIR}/logs"
+HPC_CONFIG_PATH="${HPC_DIR}/config.sh"
 
 mkdir -p "${LOGS_DIR}"
 
@@ -14,6 +15,7 @@ echo "==========================================================================
 declare -a BC_JOB_IDS
 for layout in cramped_room asymmetric_advantages coordination_ring forced_coordination counter_circuit; do
     JOB_ID=$(sbatch --parsable \
+            --export=ALL,HPC_CONFIG="${HPC_CONFIG_PATH}" \
         --output="${LOGS_DIR}/bc_${layout}_%j.out" \
         --error="${LOGS_DIR}/bc_${layout}_%j.err" \
         "${SCRIPT_DIR}/${layout}.sh")

@@ -826,9 +826,7 @@ def load_trainer(save_path, true_num_workers=False):
 
     if "trained_example" in save_path:
         # For the unit testing we update the result directory in order to avoid an error
-        config["results_dir"] = (
-            "/Users/runner/work/human_aware_rl/human_aware_rl/human_aware_rl/ppo/results_temp"
-        )
+        config["results_dir"] = "/tmp/human_aware_rl/ppo/results_temp"
 
     # Get un-trained trainer object with proper config
     trainer = gen_trainer_from_params(config)

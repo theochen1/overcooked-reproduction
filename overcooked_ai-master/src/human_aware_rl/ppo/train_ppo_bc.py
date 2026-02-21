@@ -142,6 +142,10 @@ def train_ppo_bc(
         print(f"Reward shaping horizon: {config_dict.get('reward_shaping_horizon', 'inf'):,.0f}")
         print(f"Num minibatches: {config_dict.get('num_minibatches', 6)}")
         print(f"Num envs: {config_dict.get('num_workers', 30)} (batch={config_dict.get('num_workers', 30)*400:,})")
+        print(f"Clip epsilon (start): {config_dict['clip_eps']}")
+        print(f"Cliprange schedule: {config_dict.get('cliprange_schedule', 'constant')}")
+        print(f"Clip epsilon end: {config_dict.get('clip_eps_end', 0.0)}")
+        print(f"Clip end fraction: {config_dict.get('clip_end_fraction', 1.0)}")
         print(f"BC schedule: {config_dict['bc_schedule']}")
         print(f"Results dir: {results_dir}")
         print("="*60 + "\n")
@@ -184,6 +188,9 @@ def train_ppo_bc(
         gamma=config_dict["gamma"],
         gae_lambda=config_dict["gae_lambda"],
         clip_eps=config_dict["clip_eps"],
+        clip_eps_end=config_dict.get("clip_eps_end", 0.0),
+        clip_end_fraction=config_dict.get("clip_end_fraction", 1.0),
+        cliprange_schedule=config_dict.get("cliprange_schedule", "constant"),
         vf_coef=config_dict["vf_coef"],
         max_grad_norm=config_dict["max_grad_norm"],
         num_minibatches=config_dict.get("num_minibatches", 10),

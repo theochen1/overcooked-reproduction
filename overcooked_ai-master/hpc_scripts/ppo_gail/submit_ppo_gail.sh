@@ -5,6 +5,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HPC_DIR="$(dirname "${SCRIPT_DIR}")"
 LOGS_DIR="${HPC_DIR}/logs"
+HPC_CONFIG_PATH="${HPC_DIR}/config.sh"
 
 mkdir -p "${LOGS_DIR}"
 
@@ -20,6 +21,7 @@ for layout in "${LAYOUTS[@]}"; do
         script="${SCRIPT_DIR}/${layout}_seed${seed}.sh"
         if [ -f "$script" ]; then
             JOB_ID=$(sbatch --parsable \
+            --export=ALL,HPC_CONFIG="${HPC_CONFIG_PATH}" \
                 --output="${LOGS_DIR}/ppo_gail_${layout}_seed${seed}_%j.out" \
                 --error="${LOGS_DIR}/ppo_gail_${layout}_seed${seed}_%j.err" \
                 "$script")

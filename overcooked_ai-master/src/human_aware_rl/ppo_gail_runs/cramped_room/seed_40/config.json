@@ -39,5 +39,5 @@
   "early_stop_patience": 100,
   "seed": 40,
   "experiment_name": "ppo_gail_cramped_room_seed40",
-  "results_dir": "/om/scratch/Mon/mabdel03/6.S890/overcooked_ai/src/human_aware_rl/results/ppo_gail"
+  "results_dir": "results/ppo_gail"
 }

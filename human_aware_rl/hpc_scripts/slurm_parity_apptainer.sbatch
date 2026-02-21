@@ -52,12 +52,16 @@ APPTAINER_MODULE_CMD="${APPTAINER_MODULE_CMD:-}"
 
 # Command that runs TF and writes:
 #   - minibatch dump (obs/actions/old_log_probs/returns/old_values/advs)
-#   - TF params dump
 #   - TF metrics json
-TF_DUMP_CMD="${TF_DUMP_CMD:-python -m human_aware_rl.ppo.debug_tf_dump_minibatch --out_dir ${CONT_PARITY_DIR}}"
+TF_DUMP_CMD="${TF_DUMP_CMD:-python ${CONT_REPO_ROOT}/human_aware_rl/human_aware_rl/ppo/debug_tf_dump_minibatch.py --out_dir ${CONT_PARITY_DIR}}"
 
-# Command that loads TF dump + params and writes JAX parity metrics
-JAX_PARITY_CMD="${JAX_PARITY_CMD:-python -m human_aware_rl.jaxmarl.parity_check --in_dir ${CONT_PARITY_DIR} --out_json ${CONT_PARITY_DIR}/jax_metrics.json}"
+# Command that loads TF dump and writes parity metrics
+JAX_PARITY_CMD="${JAX_PARITY_CMD:-python ${CONT_REPO_ROOT}/overcooked_ai-master/src/human_aware_rl/jaxmarl/parity_check.py --in_dir ${CONT_PARITY_DIR} --out_json ${CONT_PARITY_DIR}/jax_metrics.json}"
+
+# Optional: true JAX model update comparison on the same dumped minibatch.
+# Requires jax/flax/optax available in the runtime environment.
+RUN_JAX_COMPARE="${RUN_JAX_COMPARE:-0}"
+JAX_COMPARE_CMD="${JAX_COMPARE_CMD:-python ${CONT_REPO_ROOT}/overcooked_ai-master/src/human_aware_rl/jaxmarl/minibatch_tf_vs_jax.py --in_dir ${CONT_PARITY_DIR} --out_json ${CONT_PARITY_DIR}/jax_tf_minibatch_compare.json}"
 
 ############################
 # END USER CONFIG
@@ -65,6 +69,13 @@ JAX_PARITY_CMD="${JAX_PARITY_CMD:-python -m human_aware_rl.jaxmarl.parity_check 
 
 if [[ -n "${APPTAINER_MODULE_CMD}" ]]; then
   eval "${APPTAINER_MODULE_CMD}"
+fi
+
+if ! command -v apptainer >/dev/null 2>&1; then
+  echo "ERROR: apptainer not found in PATH."
+  echo "Set APPTAINER_MODULE_CMD, e.g.:"
+  echo "  sbatch --export=ALL,SIF_PATH=${SIF_PATH},APPTAINER_MODULE_CMD='module load apptainer',TF_DUMP_CMD='...',JAX_PARITY_CMD='...' human_aware_rl/hpc_scripts/slurm_parity_apptainer.sbatch"
+  exit 1
 fi
 
 if [[ ! -f "${SIF_PATH}" ]]; then
@@ -83,12 +94,27 @@ CONTAINER_BOOTSTRAP="
 set -euo pipefail
 source /opt/conda/etc/profile.d/conda.sh
 conda activate harl
-export PYTHONPATH=${CONT_REPO_ROOT}/human_aware_rl:${CONT_REPO_ROOT}/human_aware_rl/overcooked_ai:${CONT_REPO_ROOT}/overcooked_ai-master/src:\${PYTHONPATH:-}
+# Use a single consistent import order to avoid mixing legacy and jax package trees.
+export PYTHONPATH=${CONT_REPO_ROOT}/human_aware_rl/human_aware_rl:${CONT_REPO_ROOT}/human_aware_rl/overcooked_ai:${CONT_REPO_ROOT}/human_aware_rl:\${PYTHONPATH:-}
 cd ${CONT_REPO_ROOT}
 echo '[Step 1/2] TF dump...'
 ${TF_DUMP_CMD}
 echo '[Step 2/2] JAX parity...'
 ${JAX_PARITY_CMD}
+if [ \"${RUN_JAX_COMPARE}\" = \"1\" ]; then
+  echo '[Step 3/3] JAX model update comparison...'
+  if python - <<'PY'
+import importlib.util
+ok = all(importlib.util.find_spec(m) is not None for m in ("jax", "flax", "optax"))
+raise SystemExit(0 if ok else 1)
+PY
+  then
+    ${JAX_COMPARE_CMD}
+  else
+    echo 'Skipping JAX model update comparison: jax/flax/optax not installed in this environment.'
+    echo 'Set RUN_JAX_COMPARE=0 (default) or run Step 3 in a JAX-capable container.'
+  fi
+fi
 echo 'Done. Artifacts in ${CONT_PARITY_DIR}'
 "
 

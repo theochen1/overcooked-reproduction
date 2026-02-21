@@ -58,19 +58,19 @@ print('All imports successful!')
 
 ---
 
-## Step 3: Update Configuration (REQUIRED!)
+## Step 3: Configure Environment (REQUIRED!)
 
-Edit `hpc_scripts/config.sh` to match your cluster setup:
+You usually do **not** need to edit `PROJECT_ROOT` anymore because `hpc_scripts/config.sh`
+auto-detects it from the script location.
+
+Set your conda environment path/name before submission:
 
 ```bash
-# Line 13: Update PROJECT_ROOT to your directory
-export PROJECT_ROOT="$HOME/home/overcooked_ai"  # <-- UPDATE THIS
+# Option A: set environment name (uses $HOME/.conda/envs/<name>)
+export CONDA_ENV_NAME="overcooked"
 
-# Lines 24-28: Update conda setup for your cluster
-setup_conda() {
-    source "$HOME/miniconda3/etc/profile.d/conda.sh"  # <-- UPDATE THIS
-    conda activate overcooked                           # <-- UPDATE THIS
-}
+# Option B: set full environment path
+export CONDA_ENV_PATH="$HOME/miniconda3/envs/overcooked"
 ```
 
 ### Find your conda path:
@@ -85,7 +85,7 @@ which conda
 ## Step 4: Create Required Directories
 
 ```bash
-cd ~/home/overcooked_ai  # or wherever you cloned it
+cd <your-clone>/overcooked_ai-master
 
 # Create logs directory
 mkdir -p hpc_scripts/logs

@@ -20,6 +20,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGS_DIR="${SCRIPT_DIR}/logs"
+HPC_CONFIG_PATH="${SCRIPT_DIR}/config.sh"
 
 # Parse arguments
 BC_ONLY=false
@@ -71,6 +72,7 @@ submit_bc() {
             BC_JOB_IDS+=("DRY_RUN_${layout}")
         else
             JOB_ID=$(sbatch --parsable \
+                --export=ALL,HPC_CONFIG="${HPC_CONFIG_PATH}" \
                 --output="${LOGS_DIR}/bc_${layout}_%j.out" \
                 --error="${LOGS_DIR}/bc_${layout}_%j.err" \
                 "${SCRIPT_DIR}/bc/${layout}.sh")
@@ -99,6 +101,7 @@ submit_ppo_sp() {
                 echo "[DRY RUN] Would submit: ppo_sp/${layout}_seed${seed}.sh"
             else
                 JOB_ID=$(sbatch --parsable \
+                    --export=ALL,HPC_CONFIG="${HPC_CONFIG_PATH}" \
                     --output="${LOGS_DIR}/ppo_sp_${layout}_seed${seed}_%j.out" \
                     --error="${LOGS_DIR}/ppo_sp_${layout}_seed${seed}_%j.err" \
                     "${SCRIPT_DIR}/ppo_sp/${layout}_seed${seed}.sh")
@@ -137,6 +140,7 @@ submit_ppo_with_partner() {
                 echo "[DRY RUN] Would submit: ppo_${MODEL_LOWER}/${layout}_seed${seed}.sh"
             else
                 JOB_ID=$(sbatch --parsable \
+                    --export=ALL,HPC_CONFIG="${HPC_CONFIG_PATH}" \
                     --output="${LOGS_DIR}/ppo_${MODEL_LOWER}_${layout}_seed${seed}_%j.out" \
                     --error="${LOGS_DIR}/ppo_${MODEL_LOWER}_${layout}_seed${seed}_%j.err" \
                     $DEP_FLAG "${SCRIPT_PATH}")
@@ -171,6 +175,7 @@ submit_gail() {
             GAIL_JOB_IDS+=("DRY_RUN_${layout}")
         else
             JOB_ID=$(sbatch --parsable \
+                --export=ALL,HPC_CONFIG="${HPC_CONFIG_PATH}" \
                 --output="${LOGS_DIR}/gail_${layout}_%j.out" \
                 --error="${LOGS_DIR}/gail_${layout}_%j.err" \
                 $DEP_FLAG "${SCRIPT_DIR}/gail/${layout}.sh")

@@ -60,6 +60,9 @@ PAPER_COMMON_PARAMS = {
     "entropy_coeff_end": 0.1,
     "entropy_coeff_horizon": 0,   # No annealing
     "use_entropy_annealing": False,
+    "cliprange_schedule": "constant",
+    "clip_eps_end": 0.0,
+    "clip_end_fraction": 1.0,
     
     # Episode settings
     "horizon": 400,
@@ -79,6 +82,25 @@ PAPER_COMMON_PARAMS = {
     # Evaluation
     "evaluation_interval": 50,
     "evaluation_num_games": 50,
+}
+
+# Post-ablation PPO-SP clip schedule discovered to reduce late-phase saturation
+# while preserving strong reward growth in JAX reproduction runs.
+# This is applied only for PPO-SP via get_ppo_sp_config (not PPO-BC/PPO-GAIL).
+PPO_SP_CLIP_DISCOVERY_PARAMS = {
+    "clip_eps": 0.2,
+    "cliprange_schedule": "linear_to_end",
+    "clip_eps_end": 0.02,
+    "clip_end_fraction": 1.0,
+}
+
+# Temporary general heuristic applied to partner-conditioned PPO runs
+# (PPO_BC / PPO_GAIL) while reproduction diagnostics continue.
+PPO_PARTNER_CLIP_DISCOVERY_PARAMS = {
+    "clip_eps": 0.2,
+    "cliprange_schedule": "linear_to_end",
+    "clip_eps_end": 0.02,
+    "clip_end_fraction": 1.0,
 }
 
 # Entropy coefficient configuration
@@ -118,8 +140,8 @@ LAYOUT_ENTROPY_CONFIGS = {
 # PPO Self-Play Hyperparameters (per-layout) -- Paper Table 2 + original scripts
 # batch_size = 6 * 2000 = 12,000 (30 envs * 400 steps)
 # Total timesteps and VF_COEF from original ppo_sp_experiments.sh (ground truth)
-# NOTE: Paper Table 2 says VF=0.5 for cramped_room, but the original script
-# actually uses VF_COEF=1. We follow the original code as ground truth.
+# NOTE: Restored to the requested paper-table state for PPO-SP:
+# VF_COEF=0.5 for all layouts.
 PAPER_PPO_SP_CONFIGS: Dict[str, Dict[str, Any]] = {
     "cramped_room": {
         "learning_rate": 1e-3,
@@ -127,7 +149,7 @@ PAPER_PPO_SP_CONFIGS: Dict[str, Dict[str, Any]] = {
         "clip_eps": 0.05,
         "max_grad_norm": 0.1,
         "gae_lambda": 0.98,
-        "vf_coef": 1.0,                 # Original script: VF_COEF=1 (paper says 0.5)
+        "vf_coef": 0.5,
         "kl_coeff": 0.2,
         "reward_shaping_horizon": 2.5e6,
         "total_timesteps": 6_000_000,    # Original: PPO_RUN_TOT_TIMESTEPS=6e6
@@ -373,6 +395,7 @@ def get_ppo_sp_config(layout: str, seed: int = 0, **overrides) -> Dict[str, Any]
     config = {
         **PAPER_COMMON_PARAMS,
         **PAPER_PPO_SP_CONFIGS[layout],
+        **PPO_SP_CLIP_DISCOVERY_PARAMS,
         "layout_name": env_layout,
         "seed": seed,
         "experiment_name": f"ppo_sp_{layout}_seed{seed}",
@@ -452,6 +475,7 @@ def get_ppo_bc_config(layout: str, seed: int = 0, bc_model_dir: str = None, **ov
         **PAPER_COMMON_PARAMS,
         **PAPER_PPO_BC_COMMON,       # Override num_workers=30, batch=12000
         **PAPER_PPO_BC_CONFIGS[layout],  # Per-layout Table 3 values
+        **PPO_PARTNER_CLIP_DISCOVERY_PARAMS,
         "layout_name": env_layout,
         "seed": seed,
         "experiment_name": f"ppo_bc_{layout}_seed{seed}",
@@ -515,6 +539,7 @@ def get_ppo_gail_config(layout: str, seed: int = 0, gail_model_dir: str = None,
         **PAPER_COMMON_PARAMS,
         **PAPER_PPO_GAIL_COMMON,
         **PAPER_PPO_GAIL_CONFIGS[layout],
+        **PPO_PARTNER_CLIP_DISCOVERY_PARAMS,
         "layout_name": env_layout,
         "seed": seed,
         "experiment_name": f"ppo_gail_{layout}_seed{seed}",

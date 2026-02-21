@@ -64,6 +64,9 @@ class PPOConfig:
     gamma: float = 0.99  # GAMMA in original
     gae_lambda: float = 0.98  # LAM in original (not 0.95!)
     clip_eps: float = 0.05  # CLIPPING in original (not 0.2!)
+    clip_eps_end: float = 0.0  # End value for bounded schedules (default keeps strict parity behavior)
+    clip_end_fraction: float = 1.0  # Fraction of training to reach clip_eps_end, then hold
+    cliprange_schedule: str = "constant"  # "constant", "linear" (to zero), or "linear_to_end"
     ent_coef: float = 0.1  # ENTROPY in original
     vf_coef: float = 0.1  # VF_COEF in original (not 0.5!)
     max_grad_norm: float = 0.1  # MAX_GRAD_NORM in original (not 0.5!)
@@ -483,6 +486,43 @@ class PPOTrainer:
             self.config.entropy_coeff_end - self.config.entropy_coeff_start
         )
 
+    def _get_clip_eps_from_frac(self, frac: float) -> float:
+        """Get PPO clip epsilon from Baselines-style progress remaining in [0, 1]."""
+        schedule = self.config.cliprange_schedule.lower()
+        if schedule == "constant":
+            return self.config.clip_eps
+        if schedule == "linear":
+            # Strict linear-to-zero behavior (parity mode).
+            frac = min(max(frac, 0.0), 1.0)
+            return self.config.clip_eps * frac
+        if schedule == "linear_to_end":
+            # Bounded linear interpolation: start -> end as progress goes 1 -> 0.
+            # Optional end_fraction mirrors SB3 get_linear_fn(start, end, end_fraction):
+            # - reaches end value after end_fraction of training
+            # - then stays at end for the remaining updates
+            frac = min(max(frac, 0.0), 1.0)
+            start = self.config.clip_eps
+            end = self.config.clip_eps_end
+            end_fraction = min(max(float(self.config.clip_end_fraction), 1e-8), 1.0)
+            training_progress = 1.0 - frac  # 0 -> 1 over training
+            if training_progress >= end_fraction:
+                return end
+            alpha = training_progress / end_fraction  # 0 -> 1 over [0, end_fraction]
+            return start + (end - start) * alpha
+        raise ValueError(f"Unknown cliprange_schedule: {self.config.cliprange_schedule}")
+
+    @staticmethod
+    def _progress_remaining(update_idx: int, num_updates: int) -> float:
+        """Baselines-style progress remaining in [0, 1], inclusive endpoints.
+
+        With num_updates > 1:
+          - first update (idx=0) => 1.0
+          - last update (idx=num_updates-1) => 0.0
+        """
+        if num_updates <= 1:
+            return 1.0
+        return 1.0 - (float(update_idx) / float(num_updates - 1))
+
     def _update_learning_rate(self, train_state, new_lr: float):
         """Update the learning rate in the optimizer WITHOUT resetting Adam state.
         
@@ -575,10 +615,10 @@ class PPOTrainer:
                 entropy = -(probs * jax.nn.log_softmax(logits)).sum(axis=-1).mean()
 
                 total_loss = actor_loss + vf_coef * critic_loss - ent_coef * entropy
-                return total_loss, actor_loss, critic_loss, entropy, logits, values, probs, ratio
+                return total_loss, actor_loss, critic_loss, entropy, logits, values, probs, ratio, log_probs
 
             def loss_fn(params):
-                total_loss, actor_loss, critic_loss, entropy, logits, values, probs, ratio = _compute_loss_terms(params)
+                total_loss, actor_loss, critic_loss, entropy, logits, values, probs, ratio, log_probs = _compute_loss_terms(params)
 
                 return total_loss, {
                     "actor_loss": actor_loss,
@@ -596,7 +636,10 @@ class PPOTrainer:
                     "probs_min": jnp.min(probs, axis=-1).mean(),
                     "ratio_mean": jnp.mean(ratio),
                     "ratio_std": jnp.std(ratio),
+                    "approx_kl": 0.5 * jnp.mean(jnp.square(log_probs - old_log_probs)),
+                    "mean_abs_logratio": jnp.mean(jnp.abs(log_probs - old_log_probs)),
                     "ratio_clipped_frac": jnp.mean(jnp.abs(ratio - 1.0) > clip_eps),
+                    "clip_eps": clip_eps,
                     "values_mean": jnp.mean(values),
                     "values_std": jnp.std(values),
                     "adv_mean": jnp.mean(advantages),
@@ -624,15 +667,15 @@ class PPOTrainer:
 
             if grad_diagnostics:
                 def actor_term(params):
-                    _, actor_loss, _, _, _, _, _, _ = _compute_loss_terms(params)
+                    _, actor_loss, _, _, _, _, _, _, _ = _compute_loss_terms(params)
                     return actor_loss
 
                 def critic_term(params):
-                    _, _, critic_loss, _, _, _, _, _ = _compute_loss_terms(params)
+                    _, _, critic_loss, _, _, _, _, _, _ = _compute_loss_terms(params)
                     return vf_coef * critic_loss
 
                 def entropy_term(params):
-                    _, _, _, entropy, _, _, _, _ = _compute_loss_terms(params)
+                    _, _, _, entropy, _, _, _, _, _ = _compute_loss_terms(params)
                     return -ent_coef * entropy
 
                 actor_grads = jax.grad(actor_term)(train_state.params)
@@ -704,11 +747,11 @@ class PPOTrainer:
             'critic_head_norm': float(jnp.sqrt(critic_total)),
         }
 
-    def _update(self, train_state, batch, need_debug_grads=False):
+    def _update(self, train_state, batch, need_debug_grads=False, clip_eps_override=None):
         """Perform PPO update. Core computation is JIT-compiled."""
         ent_coef = self._get_entropy_coef(self.total_timesteps)
         vf_coef = self.config.vf_coef
-        clip_eps = self.config.clip_eps
+        clip_eps = clip_eps_override if clip_eps_override is not None else self.config.clip_eps
         
         new_train_state, loss, metrics, grads = self._jit_update_step(
             train_state,
@@ -766,6 +809,7 @@ class PPOTrainer:
             print(f"Batch size: {self.config.num_envs * self.config.num_steps}")
             print(f"Entropy annealing: {self.config.entropy_coeff_start} -> {self.config.entropy_coeff_end} over {self.config.entropy_coeff_horizon:.0f} steps")
             print(f"Clip epsilon: {self.config.clip_eps}")
+            print(f"Cliprange schedule: {self.config.cliprange_schedule}")
             if self.config.use_early_stopping:
                 print(f"Early stopping: ENABLED (patience={self.config.early_stop_patience} updates)")
             else:
@@ -916,17 +960,21 @@ class PPOTrainer:
             
             # Update learning rate if annealing is enabled
             if self.config.use_lr_annealing:
-                progress = self.total_timesteps / self.config.total_timesteps
+                progress_remaining = self._progress_remaining(update, num_updates)
                 factor = self.config.lr_annealing_factor
                 if factor > 1.0:
                     # Factor-based annealing: LR decays from initial_lr to initial_lr / factor
                     # Paper Table 3 uses this for PPO_BC (e.g., factor=3 means LR/3 at end)
-                    new_lr = self.config.learning_rate * (1.0 - progress * (1.0 - 1.0 / factor))
+                    new_lr = self.config.learning_rate * (
+                        1.0 / factor + (1.0 - 1.0 / factor) * progress_remaining
+                    )
                 else:
                     # Legacy linear-to-zero annealing (factor=1 or not set)
-                    new_lr = self.config.learning_rate * (1.0 - progress)
+                    new_lr = self.config.learning_rate * progress_remaining
                 # Update optimizer with new learning rate
                 self.train_state = self._update_learning_rate(self.train_state, new_lr)
+            progress_remaining = self._progress_remaining(update, num_updates)
+            clip_eps_update = self._get_clip_eps_from_frac(progress_remaining)
             
             # PPO update epochs
             batch_size = len(batch["obs"])
@@ -946,7 +994,10 @@ class PPOTrainer:
                     minibatch["advantages"] = (minibatch_advs - minibatch_advs.mean()) / (minibatch_advs.std() + 1e-8)
                     
                     self.train_state, loss, metrics = self._update(
-                        self.train_state, minibatch, need_debug_grads=need_debug
+                        self.train_state,
+                        minibatch,
+                        need_debug_grads=need_debug,
+                        clip_eps_override=clip_eps_update,
                     )
             
             # Compute reward statistics
@@ -988,15 +1039,20 @@ class PPOTrainer:
                 
                 # Get actual policy entropy from metrics
                 policy_entropy = float(metrics.get("entropy", 0.0)) if isinstance(metrics, dict) else 0.0
+                approx_kl = float(metrics.get("approx_kl", 0.0)) if isinstance(metrics, dict) else 0.0
+                ratio_clipped_frac = float(metrics.get("ratio_clipped_frac", 0.0)) if isinstance(metrics, dict) else 0.0
+                clip_eps_val = float(metrics.get("clip_eps", clip_eps_update)) if isinstance(metrics, dict) else clip_eps_update
                 
                 # Calculate current learning rate for logging
                 if self.config.use_lr_annealing:
-                    progress = self.total_timesteps / self.config.total_timesteps
+                    progress_remaining = self._progress_remaining(update, num_updates)
                     factor = self.config.lr_annealing_factor
                     if factor > 1.0:
-                        current_lr = self.config.learning_rate * (1.0 - progress * (1.0 - 1.0 / factor))
+                        current_lr = self.config.learning_rate * (
+                            1.0 / factor + (1.0 - 1.0 / factor) * progress_remaining
+                        )
                     else:
-                        current_lr = self.config.learning_rate * (1.0 - progress)
+                        current_lr = self.config.learning_rate * progress_remaining
                 else:
                     current_lr = self.config.learning_rate
                 
@@ -1011,6 +1067,9 @@ class PPOTrainer:
                       f"Sparse: {sparse_per_update:.1f}/ep | "
                       f"Loss: {loss:.4f} | "
                       f"Ent: {policy_entropy:.3f} (coef={ent_coef:.3f}) | "
+                      f"KL: {approx_kl:.4f} | "
+                      f"ClipFrac: {ratio_clipped_frac:.2%} | "
+                      f"ClipEps: {clip_eps_val:.4f} | "
                       f"LR: {current_lr:.2e}")
                 
                 # Print detailed diagnostics every 5 updates (when verbose_debug enabled)
