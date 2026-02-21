@@ -79,7 +79,8 @@ PAPER_COMMON_PARAMS = {
     "num_workers": 30,
     
     # Observation encoding
-    "use_legacy_encoding": True,  # Paper uses 20-channel legacy encoding
+    # Canonical HARL PPO path uses mdp.lossless_state_encoding(...) -> 26 channels.
+    "use_legacy_encoding": False,
     
     # Evaluation
     "evaluation_interval": 50,

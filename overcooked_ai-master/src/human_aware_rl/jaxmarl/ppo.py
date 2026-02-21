@@ -106,7 +106,7 @@ class PPOConfig:
     use_phi: bool = False  # Paper doesn't use potential-based shaping
     
     # Observation encoding
-    use_legacy_encoding: bool = True  # Paper uses 20-channel legacy encoding
+    use_legacy_encoding: bool = False  # False => modern 26-channel lossless encoding
     
     # BC schedule for training with BC agents
     # List of (timestep, bc_factor) tuples
@@ -316,7 +316,7 @@ class PPOTrainer:
             reward_shaping_horizon=config.reward_shaping_horizon,
             use_phi=config.use_phi,
             old_dynamics=config.old_dynamics,  # Critical: paper uses old_dynamics=True
-            use_legacy_encoding=config.use_legacy_encoding,  # Paper uses 20-channel encoding
+            use_legacy_encoding=config.use_legacy_encoding,  # False => modern 26-channel encoding
         )
         
         # Create vectorized environment

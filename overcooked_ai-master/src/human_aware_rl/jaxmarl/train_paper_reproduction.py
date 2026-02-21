@@ -5,8 +5,8 @@ Paper Reproduction Training Script (PPO Self-Play)
 Trains PPO self-play agents using per-layout hyperparameters from the paper's Table 2.
 Pulls configs from paper_configs.py to avoid hardcoded values drifting out of sync.
 
-Key settings matching the paper:
-1. Uses legacy 20-channel observation encoding (not 26-channel)
+Key settings matching the canonical HARL PPO path:
+1. Uses modern 26-channel lossless_state_encoding (not legacy 20-channel)
 2. Uses per-minibatch advantage normalization (not per-batch)
 3. Entropy coefficient = 0.1 (constant, no annealing)
 4. Per-layout learning rate (1e-3 / 6e-4 / 8e-4 depending on layout)
@@ -59,6 +59,7 @@ STRICT_SP_PARITY_KEYS = {
     "entropy_coeff_start": 0.1,
     "entropy_coeff_end": 0.1,
     "cliprange_schedule": "constant",
+    "use_legacy_encoding": False,
     # NOTE: strict parity here follows the TF1 ground-truth codepath,
     # which uses hidden size 64 in practice.
     "hidden_dim": 64,
@@ -162,7 +163,7 @@ def ppo_config_from_paper_dict(
         reward_shaping_factor=paper_cfg.get("reward_shaping_factor", 1.0),
         reward_shaping_horizon=paper_cfg["reward_shaping_horizon"],
         use_phi=paper_cfg.get("use_phi", False),
-        use_legacy_encoding=paper_cfg.get("use_legacy_encoding", True),
+        use_legacy_encoding=paper_cfg.get("use_legacy_encoding", False),
         num_hidden_layers=paper_cfg.get("num_hidden_layers", 3),
         hidden_dim=paper_cfg.get("hidden_dim", 64),
         num_filters=paper_cfg.get("num_filters", 25),

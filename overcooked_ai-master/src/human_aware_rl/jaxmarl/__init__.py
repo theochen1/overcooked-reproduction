@@ -8,7 +8,7 @@ reproduces the original 2019 paper results using modern JAX infrastructure.
 Key Features:
 - PPO training with self-play support
 - Vectorized environment wrapper for efficient parallel rollouts
-- Compatible with the original paper's 20-channel observation encoding
+- Supports both 26-channel lossless and legacy 20-channel encodings
 - Achieves 140+ training reward on random0_legacy (forced_coordination)
 - Achieves 120+ training reward on random3_legacy
 

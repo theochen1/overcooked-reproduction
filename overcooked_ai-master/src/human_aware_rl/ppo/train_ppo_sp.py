@@ -98,7 +98,7 @@ def train_ppo_sp(
         print(f"Clip end fraction: {config_dict.get('clip_end_fraction', 1.0)}")
         print(f"Cliprange schedule: {config_dict.get('cliprange_schedule', 'constant')}")
         print(f"Reward shaping horizon: {config_dict.get('reward_shaping_horizon', 2.5e6):.0e}")
-        print(f"Legacy encoding: {config_dict.get('use_legacy_encoding', True)}")
+        print(f"Legacy encoding: {config_dict.get('use_legacy_encoding', False)}")
         print(f"Old dynamics: {config_dict.get('old_dynamics', True)}")
         print(f"Results dir: {results_dir}")
         print("="*60 + "\n")
@@ -180,7 +180,7 @@ def train_ppo_sp(
         reward_shaping_factor=config_dict.get("reward_shaping_factor", 1.0),
         reward_shaping_horizon=config_dict.get("reward_shaping_horizon", 2.5e6),  # CORRECTED default
         use_phi=config_dict.get("use_phi", False),
-        use_legacy_encoding=config_dict.get("use_legacy_encoding", True),  # ADDED: Use legacy encoding
+        use_legacy_encoding=config_dict.get("use_legacy_encoding", False),
         old_dynamics=config_dict.get("old_dynamics", True),  # ADDED: Use old dynamics
         entropy_coeff_start=config_dict.get("entropy_coeff_start", 0.1),  # Original: ENTROPY=0.1
         entropy_coeff_end=config_dict.get("entropy_coeff_end", 0.1),      # No annealing

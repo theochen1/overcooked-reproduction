@@ -56,7 +56,7 @@ The implementation matches the original TensorFlow baselines in several critical
 
 1. **Weight Initialization**: Glorot uniform for conv/dense layers, orthogonal(scale=0.01) for policy output
 2. **Activation Function**: Leaky ReLU with negative_slope=0.2 (TensorFlow default)
-3. **Observation Encoding**: 20-channel legacy encoding from the 2019 paper
+3. **Observation Encoding**: 26-channel `lossless_state_encoding` (HARL canonical PPO path)
 4. **Agent Index Randomization**: Training agent randomly plays as player 0 or 1
 5. **Shared Shaped Rewards**: Both agents receive the same total shaped reward
 6. **Reward Shaping Annealing**: Shaped rewards anneal to 0 over 2.5M timesteps
@@ -83,7 +83,7 @@ Key `PPOConfig` parameters:
 | `clip_eps` | 0.05 | PPO clip epsilon |
 | `gae_lambda` | 0.98 | GAE lambda |
 | `reward_shaping_horizon` | inf | Steps to anneal shaped rewards |
-| `use_legacy_encoding` | True | Use 20-channel encoding |
+| `use_legacy_encoding` | False (parity path) | False uses 26-channel lossless encoding |
 | `verbose_debug` | False | Enable detailed diagnostics |
 
 ## Requirements
