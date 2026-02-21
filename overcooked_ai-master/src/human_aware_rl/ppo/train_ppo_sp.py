@@ -167,6 +167,9 @@ def train_ppo_sp(
         vf_coef=config_dict["vf_coef"],
         ent_coef=config_dict.get("entropy_coeff_start", 0.1),  # Original: ENTROPY=0.1
         max_grad_norm=config_dict["max_grad_norm"],
+        use_lr_annealing=config_dict.get("use_lr_annealing", False),
+        lr_annealing_factor=config_dict.get("lr_annealing_factor", 1.0),
+        lr_schedule_mode=config_dict.get("lr_schedule_mode", "tf_factor"),
         num_minibatches=config_dict.get("num_minibatches", 6),  # CORRECTED: Was 10
         num_hidden_layers=config_dict.get("num_hidden_layers", 3),
         hidden_dim=config_dict.get("hidden_dim", 64),
@@ -186,8 +189,8 @@ def train_ppo_sp(
         num_epochs=config_dict.get("num_sgd_iter", 8),
         log_interval=config_dict.get("log_interval", 1),
         save_interval=config_dict.get("save_interval", 50),
-        eval_interval=config_dict.get("eval_interval", 25),
-        eval_num_games=config_dict.get("evaluation_num_games", 5),  # ADDED
+        eval_interval=config_dict.get("evaluation_interval", config_dict.get("eval_interval", 25)),
+        eval_num_games=config_dict.get("evaluation_num_games", 5),
         early_stop_patience=config_dict.get("early_stop_patience", 100),
         use_early_stopping=config_dict.get("use_early_stopping", False),  # ADDED: Default off for paper repro
         verbose_debug=config_dict.get("verbose_debug", False),

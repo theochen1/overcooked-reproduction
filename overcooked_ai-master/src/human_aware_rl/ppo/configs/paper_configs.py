@@ -84,19 +84,16 @@ PAPER_COMMON_PARAMS = {
     "evaluation_num_games": 50,
 }
 
-# Post-ablation PPO-SP clip schedule discovered to reduce late-phase saturation
-# while preserving strong reward growth in JAX reproduction runs.
-# This is applied only for PPO-SP via get_ppo_sp_config (not PPO-BC/PPO-GAIL).
-PPO_SP_CLIP_DISCOVERY_PARAMS = {
+# Optional ablation clip schedules.
+# IMPORTANT: canonical get_ppo_*_config parity functions must NOT apply these.
+PPO_SP_CLIP_DISCOVERY_ABLATION_PARAMS = {
     "clip_eps": 0.2,
     "cliprange_schedule": "linear_to_end",
     "clip_eps_end": 0.02,
     "clip_end_fraction": 1.0,
 }
 
-# Temporary general heuristic applied to partner-conditioned PPO runs
-# (PPO_BC / PPO_GAIL) while reproduction diagnostics continue.
-PPO_PARTNER_CLIP_DISCOVERY_PARAMS = {
+PPO_PARTNER_CLIP_DISCOVERY_ABLATION_PARAMS = {
     "clip_eps": 0.2,
     "cliprange_schedule": "linear_to_end",
     "clip_eps_end": 0.02,
@@ -391,11 +388,10 @@ def get_ppo_sp_config(layout: str, seed: int = 0, **overrides) -> Dict[str, Any]
     
     env_layout = LAYOUT_TO_ENV.get(layout, layout)
     
-    # Start with common params
+    # Start with strict parity params only.
     config = {
         **PAPER_COMMON_PARAMS,
         **PAPER_PPO_SP_CONFIGS[layout],
-        **PPO_SP_CLIP_DISCOVERY_PARAMS,
         "layout_name": env_layout,
         "seed": seed,
         "experiment_name": f"ppo_sp_{layout}_seed{seed}",
@@ -470,12 +466,11 @@ def get_ppo_bc_config(layout: str, seed: int = 0, bc_model_dir: str = None, **ov
     
     env_layout = LAYOUT_TO_ENV.get(layout, layout)
     
-    # Start with common params, then override with BC-specific common and per-layout
+    # Strict parity params only (no ablation schedules injected).
     config = {
         **PAPER_COMMON_PARAMS,
         **PAPER_PPO_BC_COMMON,       # Override num_workers=30, batch=12000
         **PAPER_PPO_BC_CONFIGS[layout],  # Per-layout Table 3 values
-        **PPO_PARTNER_CLIP_DISCOVERY_PARAMS,
         "layout_name": env_layout,
         "seed": seed,
         "experiment_name": f"ppo_bc_{layout}_seed{seed}",
@@ -534,12 +529,11 @@ def get_ppo_gail_config(layout: str, seed: int = 0, gail_model_dir: str = None,
 
     env_layout = LAYOUT_TO_ENV.get(layout, layout)
 
-    # Identical to get_ppo_bc_config except experiment_name and model_dir key
+    # Strict parity params only (no ablation schedules injected).
     config = {
         **PAPER_COMMON_PARAMS,
         **PAPER_PPO_GAIL_COMMON,
         **PAPER_PPO_GAIL_CONFIGS[layout],
-        **PPO_PARTNER_CLIP_DISCOVERY_PARAMS,
         "layout_name": env_layout,
         "seed": seed,
         "experiment_name": f"ppo_gail_{layout}_seed{seed}",
@@ -661,6 +655,35 @@ def get_ppo_sp_optimized_config(layout: str, seed: int = 0,
         "use_lr_annealing": False,
     }
 
+    config.update(overrides)
+    return config
+
+
+def get_ppo_sp_clip_discovery_config(layout: str, seed: int = 0, **overrides) -> Dict[str, Any]:
+    """Ablation config: parity PPO-SP plus cliprange discovery schedule."""
+    config = get_ppo_sp_config(layout=layout, seed=seed)
+    config.update(PPO_SP_CLIP_DISCOVERY_ABLATION_PARAMS)
+    config.update(overrides)
+    return config
+
+
+def get_ppo_partner_clip_discovery_config(
+    layout: str,
+    seed: int = 0,
+    partner: str = "bc",
+    model_dir: str = None,
+    **overrides,
+) -> Dict[str, Any]:
+    """Ablation config: parity PPO-BC/PPO-GAIL plus partner clip discovery schedule."""
+    partner = partner.lower()
+    if partner == "bc":
+        config = get_ppo_bc_config(layout=layout, seed=seed, bc_model_dir=model_dir)
+    elif partner == "gail":
+        config = get_ppo_gail_config(layout=layout, seed=seed, gail_model_dir=model_dir)
+    else:
+        raise ValueError("partner must be one of: 'bc', 'gail'")
+
+    config.update(PPO_PARTNER_CLIP_DISCOVERY_ABLATION_PARAMS)
     config.update(overrides)
     return config
 

@@ -75,8 +75,9 @@ class PPOConfig:
     # Learning rate annealing
     # NOTE: Original paper PPO_SP uses LR_ANNEALING=1 which means NO annealing (constant LR)
     # PPO_BC/PPO_HP uses factor-based annealing: LR decays from initial to initial/factor
-    use_lr_annealing: bool = False  # Paper SP uses constant LR; BC uses factor-based
-    lr_annealing_factor: float = 1.0  # Factor for LR decay: final_lr = initial_lr / factor (1.0 = no decay)
+    use_lr_annealing: bool = False  # Keep False for strict PPO-SP parity (TF used constant LR there)
+    lr_annealing_factor: float = 1.0  # Baselines semantics: lr(prop)=lr/factor + (lr-lr/factor)*prop
+    lr_schedule_mode: str = "tf_factor"  # "tf_factor" (parity), or "linear_to_zero" (ablation)
     
     # Value function clipping (original baselines uses this)
     clip_vf: bool = True  # Clip value function updates
@@ -323,8 +324,9 @@ class PPOTrainer:
         self.obs_shape = self.envs.obs_shape
         self.num_actions = self.envs.num_actions
         
-        # Initialize random key from config seed
-        self.key = random.PRNGKey(config.seed)
+        # Maintain separate RNG streams so evaluation never perturbs training.
+        master_key = random.PRNGKey(config.seed)
+        self.train_key, self.eval_key = random.split(master_key, 2)
         
         # Also set numpy seed for any numpy-based randomness
         np.random.seed(config.seed)
@@ -354,7 +356,7 @@ class PPOTrainer:
 
     def _init_networks(self):
         """Initialize actor-critic networks."""
-        self.key, subkey = random.split(self.key)
+        self.train_key, subkey = random.split(self.train_key)
         
         # Determine observation shape for network initialization
         dummy_obs = jnp.zeros((1, *self.obs_shape))
@@ -512,16 +514,36 @@ class PPOTrainer:
         raise ValueError(f"Unknown cliprange_schedule: {self.config.cliprange_schedule}")
 
     @staticmethod
-    def _progress_remaining(update_idx: int, num_updates: int) -> float:
-        """Baselines-style progress remaining in [0, 1], inclusive endpoints.
+    def _baselines_progress_remaining(update_idx: int, num_updates: int) -> float:
+        """OpenAI Baselines progress variable used for schedules.
 
-        With num_updates > 1:
-          - first update (idx=0) => 1.0
-          - last update (idx=num_updates-1) => 0.0
+        Baselines computes:
+            frac = 1.0 - (update - 1.0) / nupdates
+        where update is 1-indexed.
+        With 0-indexed update_idx, this is:
+            frac = 1.0 - update_idx / nupdates
         """
-        if num_updates <= 1:
+        if num_updates <= 0:
             return 1.0
-        return 1.0 - (float(update_idx) / float(num_updates - 1))
+        return 1.0 - (float(update_idx) / float(num_updates))
+
+    def _get_lr_from_frac(self, frac: float) -> float:
+        """Learning-rate schedule with explicit Baselines-compatible semantics."""
+        if not self.config.use_lr_annealing:
+            return self.config.learning_rate
+
+        schedule_mode = self.config.lr_schedule_mode.lower()
+        frac = min(max(float(frac), 0.0), 1.0)
+
+        if schedule_mode == "tf_factor":
+            factor = max(float(self.config.lr_annealing_factor), 1e-8)
+            start = self.config.learning_rate
+            return start / factor + (start - (start / factor)) * frac
+
+        if schedule_mode == "linear_to_zero":
+            return self.config.learning_rate * frac
+
+        raise ValueError(f"Unknown lr_schedule_mode: {self.config.lr_schedule_mode}")
 
     def _update_learning_rate(self, train_state, new_lr: float):
         """Update the learning rate in the optimizer WITHOUT resetting Adam state.
@@ -960,20 +982,10 @@ class PPOTrainer:
             
             # Update learning rate if annealing is enabled
             if self.config.use_lr_annealing:
-                progress_remaining = self._progress_remaining(update, num_updates)
-                factor = self.config.lr_annealing_factor
-                if factor > 1.0:
-                    # Factor-based annealing: LR decays from initial_lr to initial_lr / factor
-                    # Paper Table 3 uses this for PPO_BC (e.g., factor=3 means LR/3 at end)
-                    new_lr = self.config.learning_rate * (
-                        1.0 / factor + (1.0 - 1.0 / factor) * progress_remaining
-                    )
-                else:
-                    # Legacy linear-to-zero annealing (factor=1 or not set)
-                    new_lr = self.config.learning_rate * progress_remaining
-                # Update optimizer with new learning rate
+                progress_remaining = self._baselines_progress_remaining(update, num_updates)
+                new_lr = self._get_lr_from_frac(progress_remaining)
                 self.train_state = self._update_learning_rate(self.train_state, new_lr)
-            progress_remaining = self._progress_remaining(update, num_updates)
+            progress_remaining = self._baselines_progress_remaining(update, num_updates)
             clip_eps_update = self._get_clip_eps_from_frac(progress_remaining)
             
             # PPO update epochs
@@ -982,7 +994,7 @@ class PPOTrainer:
             
             need_debug = self.config.verbose_debug and update % 5 == 0
             for epoch in range(self.config.num_epochs):
-                self.key, perm_key = random.split(self.key)
+                self.train_key, perm_key = random.split(self.train_key)
                 perm = random.permutation(perm_key, batch_size)
                 
                 for start in range(0, batch_size, minibatch_size):
@@ -1044,17 +1056,8 @@ class PPOTrainer:
                 clip_eps_val = float(metrics.get("clip_eps", clip_eps_update)) if isinstance(metrics, dict) else clip_eps_update
                 
                 # Calculate current learning rate for logging
-                if self.config.use_lr_annealing:
-                    progress_remaining = self._progress_remaining(update, num_updates)
-                    factor = self.config.lr_annealing_factor
-                    if factor > 1.0:
-                        current_lr = self.config.learning_rate * (
-                            1.0 / factor + (1.0 - 1.0 / factor) * progress_remaining
-                        )
-                    else:
-                        current_lr = self.config.learning_rate * progress_remaining
-                else:
-                    current_lr = self.config.learning_rate
+                progress_remaining = self._baselines_progress_remaining(update, num_updates)
+                current_lr = self._get_lr_from_frac(progress_remaining)
                 
                 # Get sparse reward tracking (actual soup deliveries)
                 sparse_sum = getattr(self, '_sparse_reward_sum', 0.0)
@@ -1334,7 +1337,7 @@ class PPOTrainer:
         rollout_action_counts = np.zeros(self.num_actions, dtype=np.int64)
         
         for step in range(self.config.num_steps):
-            self.key, action_key = random.split(self.key)
+            self.train_key, action_key = random.split(self.train_key)
             
             # Get actions for agent 0 from policy
             obs_0 = obs["agent_0"]
@@ -1358,7 +1361,9 @@ class PPOTrainer:
             # For agent 1, either use self-play or BC
             bc_factor = self._get_bc_factor(self.total_timesteps)
             
-            if bc_factor > 0 and self.bc_agent is not None and np.random.random() < bc_factor:
+            self.train_key, bc_coin_key = random.split(self.train_key)
+            bc_coin = float(random.uniform(bc_coin_key))
+            if bc_factor > 0 and self.bc_agent is not None and bc_coin < bc_factor:
                 # Use BC agent for agent 1
                 from overcooked_ai_py.mdp.actions import Action
                 bc_actions = []
@@ -1370,7 +1375,7 @@ class PPOTrainer:
                 actions_1 = jnp.array(bc_actions)
             else:
                 # Self-play: use same policy for agent 1
-                self.key, action_key_1 = random.split(self.key)
+                self.train_key, action_key_1 = random.split(self.train_key)
                 obs_1 = obs["agent_1"]
                 
                 result_1 = self._jit_inference(train_state.params, obs_1)
@@ -1525,7 +1530,7 @@ class PPOTrainer:
                 # With high entropy, argmax causes deterministic loops that prevent coordination
                 # The original TF implementation uses stochastic sampling during training episodes
                 # which is what ep_sparse_rew_mean tracks
-                self.key, key_0, key_1 = random.split(self.key, 3)
+                self.eval_key, key_0, key_1 = random.split(self.eval_key, 3)
                 action_0 = int(random.categorical(key_0, logits_0[0]))
                 action_1 = int(random.categorical(key_1, logits_1[0]))
                 
