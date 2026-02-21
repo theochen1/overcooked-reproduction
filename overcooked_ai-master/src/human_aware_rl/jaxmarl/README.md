@@ -6,12 +6,17 @@ This module provides a JAX/Flax implementation of PPO (Proximal Policy Optimizat
 
 Training achieves the following rewards on paper benchmark layouts:
 
-| Layout | Training Reward | Eval Reward (SP+SP) |
-|--------|-----------------|---------------------|
-| random0_legacy (forced_coordination) | 139.8 ± 5.2 | 200.0 |
-| random3_legacy | 120.5 ± 9.1 | 180.0 |
+| Layout | Train Shaped Return (windowed) | Train Sparse Return (windowed) | Eval Sparse Return (SP+SP) |
+|--------|--------------------------------|--------------------------------|----------------------------|
+| random0_legacy (forced_coordination) | 139.8 ± 5.2 | — | 200.0 |
+| random3_legacy | 120.5 ± 9.1 | — | 180.0 |
 
 These results match or exceed the original TensorFlow implementation.
+
+Notes:
+- `Train Shaped Return` includes reward shaping during training (annealed over time).
+- `Train Sparse Return` and `Eval Sparse Return` are sparse-only coordination metrics.
+- Evaluation policy mode is recorded per run as `eval_policy` (`stochastic` or `greedy`).
 
 ## Quick Start
 

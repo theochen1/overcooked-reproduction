@@ -286,8 +286,9 @@ def verify_training_batch():
     # Collect one rollout
     states, obs = trainer.envs.reset()
     current_episode_rewards = np.zeros(config.num_envs)
-    transitions, states, obs, ep_rewards = trainer._collect_rollout_with_rewards(
-        trainer.train_state, states, obs, current_episode_rewards
+    current_episode_sparse_rewards = np.zeros(config.num_envs)
+    transitions, states, obs, ep_rewards, ep_sparse_rewards = trainer._collect_rollout_with_rewards(
+        trainer.train_state, states, obs, current_episode_rewards, current_episode_sparse_rewards
     )
 
     print(f"\nRollout collected:")

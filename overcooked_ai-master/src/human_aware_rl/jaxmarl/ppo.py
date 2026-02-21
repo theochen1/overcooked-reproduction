@@ -10,7 +10,10 @@ from __future__ import annotations  # Defer type hint evaluation
 
 import os
 import pickle
+import json
 import time
+import subprocess
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, NamedTuple, TYPE_CHECKING
 
@@ -115,6 +118,7 @@ class PPOConfig:
     save_interval: int = 50  # Save checkpoints frequently
     eval_interval: int = 25  # Evaluate periodically
     eval_num_games: int = 5
+    eval_deterministic: bool = False  # Paper-parity default: stochastic policy sampling
     verbose: bool = True
     verbose_debug: bool = False  # Enable detailed per-update diagnostics
     grad_diagnostics: bool = False  # Compute per-loss-term grad norms (expensive)
@@ -128,6 +132,7 @@ class PPOConfig:
     results_dir: str = "results"
     experiment_name: str = "ppo_overcooked"
     seed: int = 0
+    canonical_paper_entrypoint: bool = False  # True when invoked from strict paper entrypoint
     
     # Training batch settings (paper values)
     train_batch_size: int = 12000
@@ -317,7 +322,8 @@ class PPOTrainer:
         # Create vectorized environment
         self.envs = VectorizedOvercookedEnv(
             num_envs=config.num_envs,
-            config=env_config
+            config=env_config,
+            base_seed=config.seed,
         )
         
         # Get observation and action space info
@@ -330,6 +336,12 @@ class PPOTrainer:
         
         # Also set numpy seed for any numpy-based randomness
         np.random.seed(config.seed)
+
+        if self.config.verbose and not self.config.canonical_paper_entrypoint:
+            print(
+                "[WARN] Direct PPOTrainer usage detected. "
+                "Paper-parity guarantees are only provided via train_paper_reproduction.py + paper_configs.py."
+            )
         
         # Create networks
         self._init_networks()
@@ -798,6 +810,48 @@ class PPOTrainer:
 
         return new_train_state, loss, metrics
 
+    @staticmethod
+    def _current_git_sha(cwd: str) -> Optional[str]:
+        """Best-effort git SHA lookup for run manifest."""
+        try:
+            out = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=cwd,
+                stderr=subprocess.DEVNULL,
+            )
+            return out.decode("utf-8").strip()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _package_versions() -> Dict[str, str]:
+        """Collect key package versions for auditability."""
+        versions = {
+            "numpy": np.__version__,
+            "jax": getattr(jax, "__version__", "unknown"),
+            "flax": getattr(flax, "__version__", "unknown"),
+            "optax": getattr(optax, "__version__", "unknown"),
+        }
+        return versions
+
+    def _write_run_manifest(self) -> None:
+        """Persist run manifest (git SHA + resolved config + deps)."""
+        run_dir = os.path.join(self.config.results_dir, self.config.experiment_name)
+        os.makedirs(run_dir, exist_ok=True)
+        manifest_path = os.path.join(run_dir, "run_manifest.json")
+        manifest = {
+            "timestamp_unix": int(time.time()),
+            "git_sha": self._current_git_sha(cwd=os.path.dirname(__file__)),
+            "config": {
+                k: v
+                for k, v in self.config.__dict__.items()
+                if not callable(v)
+            },
+            "package_versions": self._package_versions(),
+        }
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2, sort_keys=True)
+
     def train(self) -> Dict[str, Any]:
         """
         Run PPO training with reward tracking and early stopping.
@@ -807,14 +861,18 @@ class PPOTrainer:
         """
         self.total_timesteps = 0
         num_updates = self.config.total_timesteps // (self.config.num_envs * self.config.num_steps)
+        self._write_run_manifest()
         
         # Reset environments
         states, obs = self.envs.reset()
         
         # Episode reward tracking
-        episode_rewards = []  # Per-episode rewards
-        current_episode_rewards = np.zeros(self.config.num_envs)  # Running rewards for each env
-        recent_rewards = []  # For moving average
+        episode_shaped_rewards = []  # Per-episode shaped rewards
+        episode_sparse_rewards = []  # Per-episode sparse rewards
+        current_episode_rewards = np.zeros(self.config.num_envs)  # Running shaped rewards for each env
+        current_episode_sparse_rewards = np.zeros(self.config.num_envs)  # Running sparse rewards for each env
+        recent_shaped_rewards = []  # Windowed shaped returns
+        recent_sparse_rewards = []  # Windowed sparse returns
         reward_window = 100  # Number of episodes for moving average
         
         # Early stopping tracking
@@ -939,17 +997,21 @@ class PPOTrainer:
             self.envs.anneal_reward_shaping(self.total_timesteps)
             
             # Collect rollout with reward tracking
-            transitions, states, obs, ep_rewards = self._collect_rollout_with_rewards(
-                self.train_state, states, obs, current_episode_rewards
+            transitions, states, obs, ep_shaped_rewards, ep_sparse_rewards = self._collect_rollout_with_rewards(
+                self.train_state, states, obs, current_episode_rewards, current_episode_sparse_rewards
             )
             
             # Update episode rewards
-            if ep_rewards:
-                episode_rewards.extend(ep_rewards)
-                recent_rewards.extend(ep_rewards)
+            if ep_shaped_rewards:
+                episode_shaped_rewards.extend(ep_shaped_rewards)
+                episode_sparse_rewards.extend(ep_sparse_rewards)
+                recent_shaped_rewards.extend(ep_shaped_rewards)
+                recent_sparse_rewards.extend(ep_sparse_rewards)
                 # Keep only the last 'reward_window' episodes
-                if len(recent_rewards) > reward_window:
-                    recent_rewards = recent_rewards[-reward_window:]
+                if len(recent_shaped_rewards) > reward_window:
+                    recent_shaped_rewards = recent_shaped_rewards[-reward_window:]
+                if len(recent_sparse_rewards) > reward_window:
+                    recent_sparse_rewards = recent_sparse_rewards[-reward_window:]
             
             # Compute advantages
             last_result = self._jit_inference(self.train_state.params, obs["agent_0"])
@@ -1013,19 +1075,21 @@ class PPOTrainer:
                     )
             
             # Compute reward statistics
-            mean_reward = np.mean(recent_rewards) if recent_rewards else 0.0
-            std_reward = np.std(recent_rewards) if len(recent_rewards) > 1 else 0.0
+            mean_shaped_reward = np.mean(recent_shaped_rewards) if recent_shaped_rewards else 0.0
+            std_shaped_reward = np.std(recent_shaped_rewards) if len(recent_shaped_rewards) > 1 else 0.0
+            mean_sparse_reward = np.mean(recent_sparse_rewards) if recent_sparse_rewards else 0.0
+            std_sparse_reward = np.std(recent_sparse_rewards) if len(recent_sparse_rewards) > 1 else 0.0
             
             # Early stopping check with tolerance for variance
             # Only trigger if reward is significantly worse than best (not just slightly lower)
-            if recent_rewards and len(recent_rewards) >= 30:  # Need at least 30 episodes
+            if recent_shaped_rewards and len(recent_shaped_rewards) >= 30:  # Need at least 30 episodes
                 # Use a tolerance of 1 std or 5% of best reward (whichever is larger)
-                tolerance = max(std_reward * 0.5, best_mean_reward * 0.05, 2.0)
+                tolerance = max(std_shaped_reward * 0.5, best_mean_reward * 0.05, 2.0)
                 
-                if mean_reward > best_mean_reward:
-                    best_mean_reward = mean_reward
+                if mean_shaped_reward > best_mean_reward:
+                    best_mean_reward = mean_shaped_reward
                     no_improvement_count = 0
-                elif mean_reward >= best_mean_reward - tolerance:
+                elif mean_shaped_reward >= best_mean_reward - tolerance:
                     # Within tolerance - don't count as "no improvement"
                     no_improvement_count = max(0, no_improvement_count - 1)  # Slight recovery
                 else:
@@ -1034,7 +1098,7 @@ class PPOTrainer:
                 if self.config.use_early_stopping and no_improvement_count >= self.config.early_stop_patience:
                     if self.config.verbose:
                         print(f"\nEarly stopping: No significant improvement for {self.config.early_stop_patience} updates")
-                        print(f"Best mean reward: {best_mean_reward:.2f}, Current: {mean_reward:.2f}")
+                        print(f"Best mean shaped reward: {best_mean_reward:.2f}, Current: {mean_shaped_reward:.2f}")
                     break
             
             # Logging
@@ -1044,8 +1108,11 @@ class PPOTrainer:
                 ent_coef = self._get_entropy_coef(self.total_timesteps)
                 
                 # Format reward info
-                if recent_rewards:
-                    reward_str = f"Reward: {mean_reward:.1f}±{std_reward:.1f}"
+                if recent_shaped_rewards:
+                    reward_str = (
+                        f"TrainShaped: {mean_shaped_reward:.1f}±{std_shaped_reward:.1f} | "
+                        f"TrainSparse: {mean_sparse_reward:.1f}±{std_sparse_reward:.1f}"
+                    )
                 else:
                     reward_str = "Reward: N/A"
                 
@@ -1287,12 +1354,16 @@ class PPOTrainer:
             if update % self.config.save_interval == 0:
                 self.save_checkpoint(update)
             
-            # Periodic evaluation with greedy action selection
+            # Periodic evaluation (policy mode from config.eval_deterministic)
             if update % self.config.eval_interval == 0:
                 eval_reward = self.evaluate(self.config.eval_num_games)
                 eval_rewards.append(eval_reward)
                 if self.config.verbose:
-                    print(f"  [Eval] Update {update}: Mean reward over {self.config.eval_num_games} games = {eval_reward:.2f}")
+                    eval_policy = "greedy" if self.config.eval_deterministic else "stochastic"
+                    print(
+                        f"  [Eval-{eval_policy}] Update {update}: "
+                        f"Mean sparse reward over {self.config.eval_num_games} games = {eval_reward:.2f}"
+                    )
         
         # Final evaluation
         final_eval_reward = self.evaluate(self.config.eval_num_games)
@@ -1306,30 +1377,44 @@ class PPOTrainer:
         
         if self.config.verbose:
             total_time = time.time() - start_time
-            final_reward = np.mean(recent_rewards) if recent_rewards else 0.0
+            final_reward = np.mean(recent_shaped_rewards) if recent_shaped_rewards else 0.0
             print(f"\nTraining completed in {total_time:.1f}s")
-            print(f"Final mean reward (training): {final_reward:.2f}")
-            print(f"Best mean reward (training): {best_mean_reward:.2f}")
-            print(f"Mean eval reward (periodic): {mean_eval_reward:.2f}")
-            print(f"Final eval reward: {final_eval_reward:.2f}")
-            print(f"Total training episodes: {len(episode_rewards)}")
+            print(f"Final mean shaped reward (training): {final_reward:.2f}")
+            print(f"Final mean sparse reward (training): {np.mean(recent_sparse_rewards) if recent_sparse_rewards else 0.0:.2f}")
+            print(f"Best mean shaped reward (training): {best_mean_reward:.2f}")
+            print(f"Mean eval sparse reward (periodic): {mean_eval_reward:.2f}")
+            print(f"Final eval sparse reward: {final_eval_reward:.2f}")
+            print(f"Total training episodes: {len(episode_shaped_rewards)}")
             print(f"Total evaluations: {len(eval_rewards)}")
         
         return {
             "total_timesteps": self.total_timesteps,
             "train_info": self.train_info,
-            "episode_rewards": episode_rewards,
-            "final_mean_reward": np.mean(recent_rewards) if recent_rewards else 0.0,
+            "episode_shaped_rewards": episode_shaped_rewards,
+            "episode_sparse_rewards": episode_sparse_rewards,
+            "final_mean_reward": np.mean(recent_shaped_rewards) if recent_shaped_rewards else 0.0,
             "best_mean_reward": best_mean_reward,
+            "train_shaped_return_mean": np.mean(recent_shaped_rewards) if recent_shaped_rewards else 0.0,
+            "train_sparse_return_mean": np.mean(recent_sparse_rewards) if recent_sparse_rewards else 0.0,
             "eval_rewards": eval_rewards,
             "mean_eval_reward": mean_eval_reward,
             "final_eval_reward": final_eval_reward,
+            "eval_sparse_return_mean": mean_eval_reward,
+            "eval_policy": "greedy" if self.config.eval_deterministic else "stochastic",
         }
 
-    def _collect_rollout_with_rewards(self, train_state, states, obs, current_episode_rewards):
+    def _collect_rollout_with_rewards(
+        self,
+        train_state,
+        states,
+        obs,
+        current_episode_rewards,
+        current_episode_sparse_rewards,
+    ):
         """Collect a rollout from all environments with reward tracking."""
         transitions = []
         completed_episode_rewards = []
+        completed_episode_sparse_rewards = []
         
         # DEBUG: Track action distribution in this rollout
         if not hasattr(self, '_rollout_action_counts'):
@@ -1405,6 +1490,7 @@ class PPOTrainer:
                 sparse_rewards = np.array([info.get("sparse_reward", 0) for info in infos])
             else:
                 sparse_rewards = np.array([0] * self.config.num_envs)
+            current_episode_sparse_rewards += sparse_rewards
             
             if not hasattr(self, '_sparse_reward_sum'):
                 self._sparse_reward_sum = 0.0
@@ -1429,14 +1515,16 @@ class PPOTrainer:
                 if done:
                     # Record completed episode reward
                     completed_episode_rewards.append(current_episode_rewards[i])
+                    completed_episode_sparse_rewards.append(current_episode_sparse_rewards[i])
                     current_episode_rewards[i] = 0.0
+                    current_episode_sparse_rewards[i] = 0.0
                     
                     # Reset environment
                     states[i], new_obs = self.envs.envs[i].reset()
                     obs["agent_0"] = obs["agent_0"].at[i].set(new_obs["agent_0"])
                     obs["agent_1"] = obs["agent_1"].at[i].set(new_obs["agent_1"])
         
-        return transitions, states, obs, completed_episode_rewards
+        return transitions, states, obs, completed_episode_rewards, completed_episode_sparse_rewards
 
     def save_checkpoint(self, step: int):
         """Save a training checkpoint."""
@@ -1448,8 +1536,13 @@ class PPOTrainer:
         os.makedirs(checkpoint_dir, exist_ok=True)
         
         # Save model parameters
-        with open(os.path.join(checkpoint_dir, "params.pkl"), "wb") as f:
+        params_path = os.path.join(checkpoint_dir, "params.pkl")
+        with open(params_path, "wb") as f:
             pickle.dump(self.train_state.params, f)
+        with open(params_path, "rb") as f:
+            params_hash = hashlib.sha256(f.read()).hexdigest()
+        with open(os.path.join(checkpoint_dir, "params.sha256"), "w") as f:
+            f.write(params_hash + "\n")
         
         # Save config
         with open(os.path.join(checkpoint_dir, "config.pkl"), "wb") as f:
@@ -1474,7 +1567,11 @@ class PPOTrainer:
 
     def evaluate(self, num_games: int = None) -> float:
         """
-        Run evaluation episodes with greedy (deterministic) action selection.
+        Run evaluation episodes on sparse reward only (reward shaping disabled).
+
+        Action selection mode is controlled by `config.eval_deterministic`:
+        - True: greedy argmax policy
+        - False: stochastic categorical sampling (paper-parity default)
         
         Uses a separate environment instance to avoid polluting training state.
         
@@ -1501,6 +1598,7 @@ class PPOTrainer:
             use_legacy_encoding=self.config.use_legacy_encoding,  # CRITICAL: Must match training!
         )
         eval_env = OvercookedJaxEnv(config=eval_config)
+        eval_env.seed(self.config.seed + 10_000_000)
         
         # Track action distribution during eval (for debugging)
         eval_action_counts = {i: 0 for i in range(6)}
@@ -1526,13 +1624,13 @@ class PPOTrainer:
                     logits_0, _ = result_eval_0
                     logits_1, _ = result_eval_1
                 
-                # Use STOCHASTIC sampling during evaluation (matching training behavior)
-                # With high entropy, argmax causes deterministic loops that prevent coordination
-                # The original TF implementation uses stochastic sampling during training episodes
-                # which is what ep_sparse_rew_mean tracks
-                self.eval_key, key_0, key_1 = random.split(self.eval_key, 3)
-                action_0 = int(random.categorical(key_0, logits_0[0]))
-                action_1 = int(random.categorical(key_1, logits_1[0]))
+                if self.config.eval_deterministic:
+                    action_0 = int(jnp.argmax(logits_0[0]))
+                    action_1 = int(jnp.argmax(logits_1[0]))
+                else:
+                    self.eval_key, key_0, key_1 = random.split(self.eval_key, 3)
+                    action_0 = int(random.categorical(key_0, logits_0[0]))
+                    action_1 = int(random.categorical(key_1, logits_1[0]))
                 
                 # Track actions for debugging
                 eval_action_counts[action_0] += 1

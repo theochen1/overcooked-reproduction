@@ -155,6 +155,11 @@ class OvercookedJaxEnv:
         # This randomly assigns which player perspective the training agent sees,
         # effectively doubling training data diversity and enabling learning from both positions.
         self.agent_idx = 0
+        self.np_rng = np.random.default_rng()
+
+    def seed(self, seed: int) -> None:
+        """Set deterministic per-environment RNG state."""
+        self.np_rng = np.random.default_rng(int(seed))
 
     @property
     def observation_space(self) -> Dict[str, Any]:
@@ -201,7 +206,7 @@ class OvercookedJaxEnv:
         # CRITICAL: Randomize agent index (matching original TensorFlow implementation)
         # This ensures the training agent learns to play from both starting positions,
         # which is essential for robust policy learning in asymmetric layouts.
-        self.agent_idx = np.random.choice([0, 1])
+        self.agent_idx = int(self.np_rng.integers(0, 2))
         
         # Get raw observations for both players
         obs_p0, obs_p1 = self._encode_state(self.base_env.state)
@@ -361,7 +366,8 @@ class VectorizedOvercookedEnv:
     def __init__(
         self,
         num_envs: int,
-        config: Optional[OvercookedJaxEnvConfig] = None
+        config: Optional[OvercookedJaxEnvConfig] = None,
+        base_seed: Optional[int] = None,
     ):
         """
         Initialize vectorized environments.
@@ -382,6 +388,13 @@ class VectorizedOvercookedEnv:
         self.num_agents = self.envs[0].num_agents
         
         self._executor = ThreadPoolExecutor(max_workers=num_envs)
+        if base_seed is not None:
+            self.seed(base_seed)
+
+    def seed(self, base_seed: int) -> None:
+        """Deterministically seed each environment as base_seed + env_idx."""
+        for idx, env in enumerate(self.envs):
+            env.seed(int(base_seed) + idx)
 
     def reset(self, key: Optional[Any] = None) -> Tuple[Any, Dict[str, np.ndarray]]:
         """Reset all environments in parallel."""

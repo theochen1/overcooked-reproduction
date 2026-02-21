@@ -76,6 +76,7 @@ ALLOWED_PAPER_KEYS = {
     "entropy_coeff_start", "entropy_coeff_end", "entropy_coeff_horizon", "use_entropy_annealing",
     "use_lr_annealing", "lr_annealing_factor", "lr_schedule_mode",
     "evaluation_interval", "evaluation_num_games",
+    "eval_deterministic",
     "bc_schedule", "bc_model_dir",
     "verbose", "verbose_debug", "grad_diagnostics", "log_interval", "save_interval",
     "use_early_stopping", "early_stop_patience", "early_stop_min_reward",
@@ -172,6 +173,7 @@ def ppo_config_from_paper_dict(
         save_interval=paper_cfg.get("save_interval", 50),
         eval_interval=paper_cfg.get("evaluation_interval", 50),
         eval_num_games=paper_cfg.get("evaluation_num_games", 50),
+        eval_deterministic=paper_cfg.get("eval_deterministic", False),
         verbose=paper_cfg.get("verbose", True),
         verbose_debug=paper_cfg.get("verbose_debug", False),
         grad_diagnostics=paper_cfg.get("grad_diagnostics", False),
@@ -182,6 +184,7 @@ def ppo_config_from_paper_dict(
         results_dir=paper_cfg["results_dir"],
         experiment_name=paper_cfg["experiment_name"],
         seed=paper_cfg["seed"],
+        canonical_paper_entrypoint=True,
     )
 
 
@@ -286,9 +289,11 @@ def train_layout(layout: str, seed: int, total_timesteps: int = None,
     print("=" * 60)
     print("TRAINING COMPLETE")
     print("=" * 60)
-    print(f"Final mean reward: {results.get('final_mean_reward', 'N/A'):.2f}")
-    print(f"Best mean reward: {results.get('best_mean_reward', 'N/A'):.2f}")
-    print(f"Final eval reward: {results.get('final_eval_reward', 'N/A'):.2f}")
+    print(f"Final mean shaped return (train): {results.get('train_shaped_return_mean', results.get('final_mean_reward', 0.0)):.2f}")
+    print(f"Final mean sparse return (train): {results.get('train_sparse_return_mean', 0.0):.2f}")
+    print(f"Best mean shaped return (train): {results.get('best_mean_reward', 0.0):.2f}")
+    print(f"Final eval sparse return: {results.get('final_eval_reward', 0.0):.2f}")
+    print(f"Eval policy mode: {results.get('eval_policy', 'unknown')}")
     print()
 
     return results
