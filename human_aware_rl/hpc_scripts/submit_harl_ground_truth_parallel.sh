@@ -21,14 +21,26 @@ SIF_PATH="${SIF_PATH:-/home/tchen22/containers/harl_tf1.sif}"
 HOST_GT_DIR="${HOST_GT_DIR:-${HOST_REPO_ROOT}/ground_truth_runs}"
 APPTAINER_MODULE_CMD="${APPTAINER_MODULE_CMD:-}"
 RUN_NAME_SUFFIX="${RUN_NAME_SUFFIX:-}"
+SPLIT_SEEDS="${SPLIT_SEEDS:-0}"                 # 1 => submit one Slurm job per seed
+GLOBAL_SACRED_ARGS="${GLOBAL_SACRED_ARGS:-params.SIZE_HIDDEN_LAYERS=32}"
 
 # Resource overrides for submitted jobs.
 PARTITION="${PARTITION:-mit_normal}"
-TIME_LIMIT="${TIME_LIMIT:-12:00:00}"
+TIME_LIMIT="${TIME_LIMIT:-23:59:59}"
 MEMORY="${MEMORY:-32G}"
 CPUS="${CPUS:-8}"
 EXCLUSIVE_PER_JOB="${EXCLUSIVE_PER_JOB:-1}"   # 1 => one job per node
 EXTRA_SBATCH_ARGS="${EXTRA_SBATCH_ARGS:-}"    # Optional raw sbatch args
+
+parse_seed_list() {
+  local seeds_json="$1"
+  local compact
+  compact="$(echo "${seeds_json}" | tr -d '[] ' )"
+  if [[ -z "${compact}" ]]; then
+    return 0
+  fi
+  echo "${compact}" | tr ',' '\n'
+}
 
 submit_one() {
   local run_name="$1"
@@ -38,41 +50,57 @@ submit_one() {
   local timesteps="$5"
   local extra_sacred_args="$6"
   local effective_run_name="${run_name}${RUN_NAME_SUFFIX}"
+  local merged_sacred_args="${extra_sacred_args} ${GLOBAL_SACRED_ARGS}"
 
-  local job_name="gt_${effective_run_name}"
-  local out_path="${LOG_DIR}/${job_name}_%j.out"
-  local err_path="${LOG_DIR}/${job_name}_%j.err"
+  submit_single_job() {
+    local submit_run_name="$1"
+    local submit_seeds_json="$2"
 
-  local job_id
-  local -a node_args
-  node_args=(--nodes=1 --ntasks=1 --cpus-per-task="${CPUS}")
-  if [[ "${EXCLUSIVE_PER_JOB}" == "1" ]]; then
-    node_args+=(--exclusive)
+    local job_name="gt_${submit_run_name}"
+    local out_path="${LOG_DIR}/${job_name}_%j.out"
+    local err_path="${LOG_DIR}/${job_name}_%j.err"
+
+    local job_id
+    local -a node_args
+    node_args=(--nodes=1 --ntasks=1 --cpus-per-task="${CPUS}")
+    if [[ "${EXCLUSIVE_PER_JOB}" == "1" ]]; then
+      node_args+=(--exclusive)
+    fi
+
+    job_id=$(HOST_REPO_ROOT="${HOST_REPO_ROOT}" \
+      HOST_GT_DIR="${HOST_GT_DIR}" \
+      SIF_PATH="${SIF_PATH}" \
+      APPTAINER_MODULE_CMD="${APPTAINER_MODULE_CMD}" \
+      RUN_NAME="${submit_run_name}" \
+      LAYOUT="${layout}" \
+      OTHER_AGENT_TYPE="${other_agent_type}" \
+      SEEDS_JSON="${submit_seeds_json}" \
+      PPO_RUN_TOT_TIMESTEPS="${timesteps}" \
+      EXTRA_SACRED_ARGS="${merged_sacred_args}" \
+      sbatch --parsable \
+      --partition="${PARTITION}" \
+      --time="${TIME_LIMIT}" \
+      --mem="${MEMORY}" \
+      "${node_args[@]}" \
+      --job-name="${job_name}" \
+      --output="${out_path}" \
+      --error="${err_path}" \
+      --export=ALL \
+      ${EXTRA_SBATCH_ARGS} \
+      "${RUN_SBATCH}")
+
+    echo "${job_id}  ${job_name}  layout=${layout}  partner=${other_agent_type}  seeds=${submit_seeds_json}"
+  }
+
+  if [[ "${SPLIT_SEEDS}" == "1" ]]; then
+    local seed
+    while IFS= read -r seed; do
+      [[ -z "${seed}" ]] && continue
+      submit_single_job "${effective_run_name}_seed${seed}" "[${seed}]"
+    done < <(parse_seed_list "${seeds_json}")
+  else
+    submit_single_job "${effective_run_name}" "${seeds_json}"
   fi
-
-  job_id=$(HOST_REPO_ROOT="${HOST_REPO_ROOT}" \
-    HOST_GT_DIR="${HOST_GT_DIR}" \
-    SIF_PATH="${SIF_PATH}" \
-    APPTAINER_MODULE_CMD="${APPTAINER_MODULE_CMD}" \
-    RUN_NAME="${effective_run_name}" \
-    LAYOUT="${layout}" \
-    OTHER_AGENT_TYPE="${other_agent_type}" \
-    SEEDS_JSON="${seeds_json}" \
-    PPO_RUN_TOT_TIMESTEPS="${timesteps}" \
-    EXTRA_SACRED_ARGS="${extra_sacred_args}" \
-    sbatch --parsable \
-    --partition="${PARTITION}" \
-    --time="${TIME_LIMIT}" \
-    --mem="${MEMORY}" \
-    "${node_args[@]}" \
-    --job-name="${job_name}" \
-    --output="${out_path}" \
-    --error="${err_path}" \
-    --export=ALL \
-    ${EXTRA_SBATCH_ARGS} \
-    "${RUN_SBATCH}")
-
-  echo "${job_id}  ${job_name}  layout=${layout}  partner=${other_agent_type}"
 }
 
 phase_enabled() {
@@ -86,6 +114,8 @@ echo "HOST_REPO_ROOT=${HOST_REPO_ROOT}"
 echo "HOST_GT_DIR=${HOST_GT_DIR}"
 echo "SIF_PATH=${SIF_PATH}"
 echo "RUN_NAME_SUFFIX=${RUN_NAME_SUFFIX:-<none>}"
+echo "SPLIT_SEEDS=${SPLIT_SEEDS}"
+echo "GLOBAL_SACRED_ARGS=${GLOBAL_SACRED_ARGS:-<none>}"
 echo "EXCLUSIVE_PER_JOB=${EXCLUSIVE_PER_JOB}"
 echo "EXTRA_SBATCH_ARGS=${EXTRA_SBATCH_ARGS:-<none>}"
 echo ""
