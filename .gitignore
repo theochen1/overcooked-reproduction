@@ -31,7 +31,6 @@ ENV/
 # Root-level generated folders
 data/
 logs/
-ground_truth_runs/
 parity_artifacts/
 
 # Project-generated run folders anywhere in repo
