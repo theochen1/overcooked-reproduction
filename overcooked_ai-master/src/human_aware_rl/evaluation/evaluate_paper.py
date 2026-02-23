@@ -356,6 +356,9 @@ def evaluate_paper_config(
     ):
         run_template = run_name_templates.get(source)
         run_agent_name = agent_dirs.get(source)
+        if source == "pbt":
+            run_template = run_template or "pbt_{layout}"
+            run_agent_name = run_agent_name or "pbt_agent"
         checkpoint = None
         if prefer_run_registry and run_template and run_agent_name and seed is not None:
             checkpoint = find_checkpoint_from_run(
@@ -388,7 +391,8 @@ def evaluate_paper_config(
             return load_jax_agent(checkpoint, env_layout, agent_index)
         
         elif source == "pbt":
-            checkpoint = find_checkpoint(pbt_dir, layout, seed)
+            if checkpoint is None:
+                checkpoint = find_checkpoint(pbt_dir, layout, seed)
             if checkpoint is None:
                 raise FileNotFoundError(f"No PBT checkpoint found for {layout}")
             return load_jax_agent(checkpoint, env_layout, agent_index)

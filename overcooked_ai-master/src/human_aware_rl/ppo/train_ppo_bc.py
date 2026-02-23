@@ -44,6 +44,10 @@ from human_aware_rl.ppo.run_paths import (
     build_training_output_paths,
     default_ppo_data_dir,
 )
+from human_aware_rl.ppo.run_registry_defaults import (
+    get_default_agent_dir,
+    get_default_run_name,
+)
 
 
 PARTNER_TYPE_TO_SPLIT = {
@@ -51,7 +55,7 @@ PARTNER_TYPE_TO_SPLIT = {
     "bc_test": "test",
 }
 
-DEFAULT_AGENT_NAME = "ppo_bc_agent"
+DEFAULT_AGENT_NAME = get_default_agent_dir("ppo_bc")
 
 
 def train_ppo_bc(
@@ -68,6 +72,7 @@ def train_ppo_bc(
     verbose: bool = True,
     use_wandb: bool = False,
     wandb_project: str = "overcooked-ai",
+    canonical_paper_entrypoint: bool = True,
     **overrides
 ) -> Dict[str, Any]:
     """
@@ -136,7 +141,7 @@ def train_ppo_bc(
     # Canonical run naming/layout mirrors deprecated repo:
     #   DATA_DIR/ppo_runs/<run_name>/seed<seed>/<agent_name>/checkpoint_*
     if ex_name is None:
-        ex_name = f"ppo_bc__partner-{partner_type}__layout-{layout}"
+        ex_name = get_default_run_name("ppo_bc", layout=layout, partner_type=partner_type)
     resolved_run_name = build_run_name(ex_name, timestamp_dir=timestamp_dir)
     ppo_data_dir = ppo_data_dir or default_ppo_data_dir()
     output_paths = build_training_output_paths(
@@ -149,9 +154,11 @@ def train_ppo_bc(
     trainer_results_dir = output_paths["trainer_results_dir"]
     trainer_experiment_name = output_paths["trainer_experiment_name"]
 
-    if use_legacy_results_layout and results_dir:
-        trainer_results_dir = results_dir
-        trainer_experiment_name = config_dict["experiment_name"]
+    if use_legacy_results_layout and results_dir and verbose:
+        print(
+            "[WARN] --use_legacy_results_layout is ignored. "
+            "Checkpoints are always written under DATA_DIR/ppo_runs/<run>/seed<seed>/<agent>/"
+        )
 
     if verbose:
         print("\n" + "="*60)
@@ -256,6 +263,7 @@ def train_ppo_bc(
         results_dir=trainer_results_dir,
         experiment_name=trainer_experiment_name,
         seed=seed,
+        canonical_paper_entrypoint=canonical_paper_entrypoint,
     )
     
     # Create trainer and train
@@ -369,7 +377,9 @@ def train_all_layouts(
                     ex_name=(
                         f"{ex_name_prefix}__layout-{layout}"
                         if ex_name_prefix
-                        else f"ppo_bc__partner-{partner_type}__layout-{layout}"
+                        else get_default_run_name(
+                            "ppo_bc", layout=layout, partner_type=partner_type
+                        )
                     ),
                     timestamp_dir=timestamp_dir,
                     ppo_data_dir=ppo_data_dir,
@@ -604,7 +614,9 @@ def main():
             bc_model_dir=bc_model_dir,
             results_dir=args.results_dir,
             use_legacy_results_layout=args.use_legacy_results_layout,
-            ex_name=args.ex_name or f"ppo_bc__partner-{args.partner_type}__layout-{args.layout}",
+            ex_name=args.ex_name or get_default_run_name(
+                "ppo_bc", layout=args.layout, partner_type=args.partner_type
+            ),
             timestamp_dir=args.timestamp_dir,
             ppo_data_dir=args.ppo_data_dir,
             partner_type=args.partner_type,

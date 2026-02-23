@@ -47,6 +47,10 @@ from human_aware_rl.ppo.run_paths import (
     build_training_output_paths,
     default_ppo_data_dir,
 )
+from human_aware_rl.ppo.run_registry_defaults import (
+    get_default_agent_dir,
+    get_default_run_name,
+)
 
 
 # Default HP model paths (trained on human TEST data - the evaluation partner)
@@ -55,7 +59,7 @@ DEFAULT_HP_MODEL_PATHS = {
     for layout in PAPER_LAYOUTS
 }
 
-DEFAULT_AGENT_NAME = "ppo_hp_agent"
+DEFAULT_AGENT_NAME = get_default_agent_dir("ppo_hp")
 
 
 def train_ppo_hp(
@@ -71,6 +75,7 @@ def train_ppo_hp(
     verbose: bool = True,
     use_wandb: bool = False,
     wandb_project: str = "overcooked-ai",
+    canonical_paper_entrypoint: bool = True,
     **overrides
 ) -> Dict[str, Any]:
     """
@@ -129,7 +134,7 @@ def train_ppo_hp(
     )
 
     if ex_name is None:
-        ex_name = f"ppo_hp__layout-{layout}"
+        ex_name = get_default_run_name("ppo_hp", layout=layout)
     resolved_run_name = build_run_name(ex_name, timestamp_dir=timestamp_dir)
     ppo_data_dir = ppo_data_dir or default_ppo_data_dir()
     output_paths = build_training_output_paths(
@@ -140,9 +145,11 @@ def train_ppo_hp(
     )
     trainer_results_dir = output_paths["trainer_results_dir"]
     trainer_experiment_name = output_paths["trainer_experiment_name"]
-    if use_legacy_results_layout and results_dir:
-        trainer_results_dir = results_dir
-        trainer_experiment_name = f"ppo_hp_{layout}_seed{seed}"
+    if use_legacy_results_layout and results_dir and verbose:
+        print(
+            "[WARN] --use_legacy_results_layout is ignored. "
+            "Checkpoints are always written under DATA_DIR/ppo_runs/<run>/seed<seed>/<agent>/"
+        )
     
     if verbose:
         print("\n" + "="*60)
@@ -223,6 +230,7 @@ def train_ppo_hp(
         results_dir=trainer_results_dir,
         experiment_name=trainer_experiment_name,
         seed=seed,
+        canonical_paper_entrypoint=canonical_paper_entrypoint,
     )
     
     # Create trainer and train
@@ -321,7 +329,7 @@ def train_all_layouts(
                     ex_name=(
                         f"{ex_name_prefix}__layout-{layout}"
                         if ex_name_prefix
-                        else f"ppo_hp__layout-{layout}"
+                        else get_default_run_name("ppo_hp", layout=layout)
                     ),
                     timestamp_dir=timestamp_dir,
                     ppo_data_dir=ppo_data_dir,
@@ -521,7 +529,7 @@ def main():
             hp_model_dir=hp_model_dir,
             results_dir=args.results_dir,
             use_legacy_results_layout=args.use_legacy_results_layout,
-            ex_name=args.ex_name or f"ppo_hp__layout-{args.layout}",
+            ex_name=args.ex_name or get_default_run_name("ppo_hp", layout=args.layout),
             timestamp_dir=args.timestamp_dir,
             ppo_data_dir=args.ppo_data_dir,
             agent_name=args.agent_name,

@@ -41,8 +41,12 @@ from human_aware_rl.ppo.run_paths import (
     build_training_output_paths,
     default_ppo_data_dir,
 )
+from human_aware_rl.ppo.run_registry_defaults import (
+    get_default_agent_dir,
+    get_default_run_name,
+)
 
-DEFAULT_AGENT_NAME = "ppo_agent"
+DEFAULT_AGENT_NAME = get_default_agent_dir("ppo_sp")
 
 
 def train_ppo_sp(
@@ -57,6 +61,7 @@ def train_ppo_sp(
     verbose: bool = True,
     use_wandb: bool = False,
     wandb_project: str = "overcooked-ai",
+    canonical_paper_entrypoint: bool = True,
     **overrides
 ) -> Dict[str, Any]:
     """
@@ -96,7 +101,7 @@ def train_ppo_sp(
     )
 
     if ex_name is None:
-        ex_name = f"ppo_sp__layout-{layout}"
+        ex_name = get_default_run_name("ppo_sp", layout=layout)
     resolved_run_name = build_run_name(ex_name, timestamp_dir=timestamp_dir)
     ppo_data_dir = ppo_data_dir or default_ppo_data_dir()
     output_paths = build_training_output_paths(
@@ -107,9 +112,11 @@ def train_ppo_sp(
     )
     trainer_results_dir = output_paths["trainer_results_dir"]
     trainer_experiment_name = output_paths["trainer_experiment_name"]
-    if use_legacy_results_layout and results_dir:
-        trainer_results_dir = results_dir
-        trainer_experiment_name = config_dict["experiment_name"]
+    if use_legacy_results_layout and results_dir and verbose:
+        print(
+            "[WARN] --use_legacy_results_layout is ignored. "
+            "Checkpoints are always written under DATA_DIR/ppo_runs/<run>/seed<seed>/<agent>/"
+        )
     
     if verbose:
         print("\n" + "="*60)
@@ -136,34 +143,6 @@ def train_ppo_sp(
         print(f"Seed dir: {output_paths['seed_dir']}")
         print(f"Agent dir: {output_paths['agent_dir']}")
         print("="*60 + "\n")
-    
-    # #region agent log
-    # Debug instrumentation: Log config from train_ppo_sp (H1-H4)
-    try:
-        import json
-        import time as time_module
-        log_entry = json.dumps({
-            "location": "train_ppo_sp.py:train_start",
-            "message": "train_ppo_sp config",
-            "data": {
-                "paper_layout": layout,
-                "env_layout": config_dict['layout_name'],
-                "total_timesteps": config_dict['total_timesteps'],
-                "clip_eps": config_dict['clip_eps'],
-                "entropy_coeff_start": config_dict.get('entropy_coeff_start', 0.1),
-                "entropy_coeff_end": config_dict.get('entropy_coeff_end', 0.1),
-                "entropy_coeff_horizon": config_dict.get('entropy_coeff_horizon', 0),
-                "reward_shaping_horizon": config_dict.get('reward_shaping_horizon', float('inf')),
-            },
-            "timestamp": int(time_module.time() * 1000),
-            "sessionId": "debug-session",
-            "hypothesisId": "H1,H2,H3,H4"
-        })
-        with open("/Users/theochen/Desktop/overcooked-reproduction/.cursor/debug.log", "a") as f:
-            f.write(log_entry + "\n")
-    except Exception:
-        pass
-    # #endregion
     
     # Initialize WandB if enabled
     if use_wandb:
@@ -233,6 +212,7 @@ def train_ppo_sp(
         results_dir=trainer_results_dir,
         experiment_name=trainer_experiment_name,
         seed=seed,
+        canonical_paper_entrypoint=canonical_paper_entrypoint,
     )
     
     # Create trainer and train
@@ -335,7 +315,7 @@ def train_all_layouts(
                     ex_name=(
                         f"{ex_name_prefix}__layout-{layout}"
                         if ex_name_prefix
-                        else f"ppo_sp__layout-{layout}"
+                        else get_default_run_name("ppo_sp", layout=layout)
                     ),
                     timestamp_dir=timestamp_dir,
                     ppo_data_dir=ppo_data_dir,
@@ -596,7 +576,7 @@ def main():
             seed=args.seed,
             results_dir=args.results_dir,
             use_legacy_results_layout=args.use_legacy_results_layout,
-            ex_name=args.ex_name or f"ppo_sp__layout-{args.layout}",
+            ex_name=args.ex_name or get_default_run_name("ppo_sp", layout=args.layout),
             timestamp_dir=args.timestamp_dir,
             ppo_data_dir=args.ppo_data_dir,
             agent_name=args.agent_name,
