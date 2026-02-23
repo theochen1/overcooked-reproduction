@@ -21,10 +21,18 @@ Figure 4(b) - PBT Comparison:
 
 Usage:
     python -m human_aware_rl.evaluation.evaluate_paper \\
-        --ppo_sp_dir results/ppo_sp \\
-        --ppo_bc_dir results/ppo_bc \\
-        --ppo_hp_dir results/ppo_hp \\
+        --ppo_data_dir /path/to/DATA_DIR/ppo_runs \\
+        --run_name_sp "ppo_sp__layout-{layout}" \\
+        --run_name_bc "ppo_bc__partner-bc_train__layout-{layout}" \\
+        --run_name_hp "ppo_hp__layout-{layout}" \\
+        --agent_dir_sp ppo_agent \\
+        --agent_dir_bc ppo_bc_agent \\
+        --agent_dir_hp ppo_hp_agent \\
         --output_file paper_results.json
+
+By default this prefers canonical run-registry loading from DATA_DIR/ppo_runs.
+Legacy results/* scanning is retained as a fallback, or can be forced first via
+--disable_run_registry.
 """
 
 import argparse
@@ -40,6 +48,10 @@ from overcooked_ai_py.agents.benchmarking import AgentEvaluator
 from human_aware_rl.ppo.configs.paper_configs import PAPER_LAYOUTS, LAYOUT_TO_ENV
 from human_aware_rl.imitation.behavior_cloning import BC_SAVE_DIR
 from human_aware_rl.ppo.run_paths import default_ppo_data_dir, format_run_template
+from human_aware_rl.ppo.run_registry_defaults import (
+    DEFAULT_AGENT_DIRS,
+    DEFAULT_RUN_NAME_TEMPLATES,
+)
 from human_aware_rl.evaluation.evaluate_all import (
     load_bc_agent,
     load_jax_agent,
@@ -197,18 +209,6 @@ GAIL_COMPARISON_CONFIGS = {
     "bc_hp": FIGURE_4A_CONFIGS["bc_hp"],
 }
 
-DEFAULT_RUN_NAME_TEMPLATES = {
-    "ppo_sp": "ppo_sp__layout-{layout}",
-    "ppo_bc": "ppo_bc__partner-bc_train__layout-{layout}",
-    "ppo_hp": "ppo_hp__layout-{layout}",
-}
-
-DEFAULT_AGENT_DIRS = {
-    "ppo_sp": "ppo_agent",
-    "ppo_bc": "ppo_bc_agent",
-    "ppo_hp": "ppo_hp_agent",
-}
-
 # Combined configs for full evaluation
 ALL_EVALUATION_CONFIGS = {
     **FIGURE_4A_CONFIGS,
@@ -272,6 +272,15 @@ def find_checkpoint_from_run(
     if not checkpoints:
         return None
     return os.path.join(agent_dir, sorted(checkpoints)[-1])
+
+
+def resolve_bc_root(source_split: Optional[str], bc_dir: str, hp_dir: str) -> str:
+    """Resolve BC-model root from split metadata."""
+    if source_split == "train":
+        return bc_dir
+    if source_split == "test":
+        return hp_dir
+    return bc_dir
 
 
 def evaluate_paper_config(
@@ -338,7 +347,13 @@ def evaluate_paper_config(
         idx_0, idx_1 = 1, 0
     
     # Load agents
-    def load_agent(agent_type: str, source: str, agent_index: int):
+    def load_agent(
+        agent_type: str,
+        source: str,
+        agent_index: int,
+        source_split: Optional[str],
+        agent_slot: int,
+    ):
         run_template = run_name_templates.get(source)
         run_agent_name = agent_dirs.get(source)
         checkpoint = None
@@ -397,13 +412,21 @@ def evaluate_paper_config(
             return load_jax_agent(checkpoint, env_layout, agent_index)
         
         elif source == "bc":
-            bc_path = os.path.join(bc_dir, layout)
+            bc_root = resolve_bc_root(source_split, bc_dir, hp_dir)
+            bc_path = os.path.join(bc_root, layout)
             if not os.path.exists(bc_path):
                 raise FileNotFoundError(f"No BC model found at {bc_path}")
             return load_bc_agent(bc_path, env_layout, agent_index)
         
         elif source == "hp":
-            hp_path = os.path.join(hp_dir, layout)
+            split = source_split or "test"
+            if split == "train":
+                raise ValueError(
+                    f"Invalid split for HP source on agent_{agent_slot}: "
+                    "source='hp' requires test split in this codebase."
+                )
+            hp_root = resolve_bc_root(split, bc_dir, hp_dir)
+            hp_path = os.path.join(hp_root, layout)
             if not os.path.exists(hp_path):
                 raise FileNotFoundError(f"No HP model found at {hp_path}")
             return load_bc_agent(hp_path, env_layout, agent_index)
@@ -411,8 +434,20 @@ def evaluate_paper_config(
         else:
             raise ValueError(f"Unknown source: {source}")
     
-    agent_0 = load_agent(config["agent_0_type"], config["agent_0_source"], idx_0)
-    agent_1 = load_agent(config["agent_1_type"], config["agent_1_source"], idx_1)
+    agent_0 = load_agent(
+        config["agent_0_type"],
+        config["agent_0_source"],
+        idx_0,
+        config.get("agent_0_source_split"),
+        0,
+    )
+    agent_1 = load_agent(
+        config["agent_1_type"],
+        config["agent_1_source"],
+        idx_1,
+        config.get("agent_1_source_split"),
+        1,
+    )
     
     return evaluate_agent_pair(agent_0, agent_1, env_layout, num_games)
 

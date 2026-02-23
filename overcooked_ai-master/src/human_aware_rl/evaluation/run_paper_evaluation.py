@@ -6,6 +6,10 @@ This script provides a complete pipeline to:
 2. Run all Figure 4 evaluations
 3. Generate paper-style figures
 
+Availability checks and evaluations prefer canonical run-registry paths under
+DATA_DIR/ppo_runs. Legacy results/* directories are kept as fallback for
+backward compatibility.
+
 Usage:
     # Full evaluation (requires all models trained)
     python -m human_aware_rl.evaluation.run_paper_evaluation --all
@@ -29,6 +33,10 @@ from typing import Dict, List, Optional, Any
 from human_aware_rl.ppo.configs.paper_configs import PAPER_LAYOUTS
 from human_aware_rl.imitation.behavior_cloning import BC_SAVE_DIR
 from human_aware_rl.ppo.run_paths import default_ppo_data_dir, format_run_template
+from human_aware_rl.ppo.run_registry_defaults import (
+    DEFAULT_AGENT_DIRS,
+    DEFAULT_RUN_NAME_TEMPLATES,
+)
 
 
 # Default directories
@@ -40,18 +48,6 @@ DEFAULT_DIRS = {
     "ppo_data_dir": default_ppo_data_dir(),
     "bc": os.path.join(BC_SAVE_DIR, "train"),
     "hp": os.path.join(BC_SAVE_DIR, "test"),
-}
-
-DEFAULT_RUN_NAME_TEMPLATES = {
-    "ppo_sp": "ppo_sp__layout-{layout}",
-    "ppo_bc": "ppo_bc__partner-bc_train__layout-{layout}",
-    "ppo_hp": "ppo_hp__layout-{layout}",
-}
-
-DEFAULT_AGENT_DIRS = {
-    "ppo_sp": "ppo_agent",
-    "ppo_bc": "ppo_bc_agent",
-    "ppo_hp": "ppo_hp_agent",
 }
 
 

@@ -34,6 +34,7 @@ except ImportError:
 
 from human_aware_rl.ppo.configs.paper_configs import (
     PAPER_LAYOUTS,
+    LAYOUT_TO_ENV,
     get_ppo_bc_config,
     PAPER_PPO_BC_CONFIGS,
 )
@@ -44,25 +45,6 @@ from human_aware_rl.ppo.run_paths import (
     default_ppo_data_dir,
 )
 
-
-# Layout mapping for PPO BC: Use LEGACY layouts (same as PPO SP)
-# IMPORTANT: All experiments must use the same layout version for consistent results!
-# The original paper used the same layouts for ALL experiments (PPO SP, PPO BC, etc.)
-# Legacy layouts have explicit MDP params: cook_time=20, num_items_for_soup=3, delivery_reward=20
-LAYOUT_TO_ENV_BC = {
-    "cramped_room": "cramped_room_legacy",
-    "asymmetric_advantages": "asymmetric_advantages_legacy",
-    "coordination_ring": "coordination_ring_legacy",
-    "forced_coordination": "random0_legacy",
-    "counter_circuit": "random3_legacy",
-}
-
-
-# Default BC model paths (trained on human training data)
-DEFAULT_BC_MODEL_PATHS = {
-    layout: os.path.join(BC_SAVE_DIR, "train", layout)
-    for layout in PAPER_LAYOUTS
-}
 
 PARTNER_TYPE_TO_SPLIT = {
     "bc_train": "train",
@@ -148,9 +130,8 @@ def train_ppo_bc(
         **overrides
     )
     
-    # OVERRIDE: Use original layouts (not legacy) to match BC partner models
-    # BC models are trained on original layouts, PPO BC must use the same
-    config_dict["layout_name"] = LAYOUT_TO_ENV_BC.get(layout, layout)
+    # Use paper-parity legacy layout mapping from paper_configs.py.
+    config_dict["layout_name"] = LAYOUT_TO_ENV.get(layout, layout)
     
     # Canonical run naming/layout mirrors deprecated repo:
     #   DATA_DIR/ppo_runs/<run_name>/seed<seed>/<agent_name>/checkpoint_*
@@ -341,6 +322,25 @@ def train_all_layouts(
     if layouts is None:
         layouts = PAPER_LAYOUTS
     
+    if partner_type not in PARTNER_TYPE_TO_SPLIT:
+        raise ValueError(
+            f"Unknown partner_type '{partner_type}'. "
+            f"Expected one of: {list(PARTNER_TYPE_TO_SPLIT.keys())}"
+        )
+
+    split = PARTNER_TYPE_TO_SPLIT[partner_type]
+    default_base = os.path.join(BC_SAVE_DIR, split)
+    bc_model_base = bc_model_base_dir or default_base
+    if bc_model_base_dir:
+        normalized_base = os.path.normpath(bc_model_base_dir)
+        base_tail = os.path.basename(normalized_base)
+        if base_tail in {"train", "test"} and base_tail != split and verbose:
+            print(
+                f"[WARN] bc_model_base_dir='{bc_model_base_dir}' conflicts with "
+                f"partner_type='{partner_type}' (split='{split}'). "
+                "Using explicit bc_model_base_dir override."
+            )
+
     all_results = {}
     total_runs = len(layouts) * len(seeds)
     current_run = 0
@@ -348,11 +348,8 @@ def train_all_layouts(
     for layout in layouts:
         all_results[layout] = {}
         
-        # Get BC model path for this layout
-        if bc_model_base_dir:
-            bc_model_dir = os.path.join(bc_model_base_dir, layout)
-        else:
-            bc_model_dir = DEFAULT_BC_MODEL_PATHS.get(layout)
+        # Resolve split-aware BC model path for this layout.
+        bc_model_dir = os.path.join(bc_model_base, layout)
         
         for seed in seeds:
             current_run += 1
@@ -598,7 +595,8 @@ def main():
             # Construct path from base directory
             bc_model_dir = os.path.join(args.bc_model_base_dir, args.layout)
         elif bc_model_dir is None and args.use_default_bc_models:
-            bc_model_dir = DEFAULT_BC_MODEL_PATHS.get(args.layout)
+            split = PARTNER_TYPE_TO_SPLIT[args.partner_type]
+            bc_model_dir = os.path.join(BC_SAVE_DIR, split, args.layout)
         
         results = train_ppo_bc(
             layout=args.layout,
