@@ -39,6 +39,7 @@ from overcooked_ai_py.agents.benchmarking import AgentEvaluator
 
 from human_aware_rl.ppo.configs.paper_configs import PAPER_LAYOUTS, LAYOUT_TO_ENV
 from human_aware_rl.imitation.behavior_cloning import BC_SAVE_DIR
+from human_aware_rl.ppo.run_paths import default_ppo_data_dir, format_run_template
 from human_aware_rl.evaluation.evaluate_all import (
     load_bc_agent,
     load_jax_agent,
@@ -58,6 +59,7 @@ FIGURE_4A_CONFIGS = {
         "agent_1_type": "bc",
         "agent_0_source": "ppo_hp",
         "agent_1_source": "hp",
+        "agent_1_source_split": "test",
         "color": "red",
         "style": "dotted_line",
     },
@@ -80,6 +82,7 @@ FIGURE_4A_CONFIGS = {
         "agent_1_type": "bc",
         "agent_0_source": "ppo_sp",
         "agent_1_source": "hp",
+        "agent_1_source_split": "test",
         "color": "#2d6777",  # Teal
         "style": "bar",
     },
@@ -91,6 +94,7 @@ FIGURE_4A_CONFIGS = {
         "agent_1_type": "bc",
         "agent_0_source": "ppo_bc",
         "agent_1_source": "hp",
+        "agent_1_source_split": "test",
         "color": "#F79646",  # Orange
         "style": "bar",
     },
@@ -102,6 +106,8 @@ FIGURE_4A_CONFIGS = {
         "agent_1_type": "bc",
         "agent_0_source": "bc",
         "agent_1_source": "hp",
+        "agent_0_source_split": "train",
+        "agent_1_source_split": "test",
         "color": "#7f7f7f",  # Gray
         "style": "bar",
     },
@@ -157,6 +163,7 @@ GAIL_COMPARISON_CONFIGS = {
         "agent_1_type": "bc",
         "agent_0_source": "ppo_gail",
         "agent_1_source": "hp",
+        "agent_1_source_split": "test",
         "color": "#9467BD",  # Purple
         "style": "bar",
     },
@@ -168,6 +175,7 @@ GAIL_COMPARISON_CONFIGS = {
         "agent_1_type": "bc",
         "agent_0_source": "ppo_gail_opt",
         "agent_1_source": "hp",
+        "agent_1_source_split": "test",
         "color": "#D62728",  # Dark red
         "style": "bar",
     },
@@ -179,6 +187,7 @@ GAIL_COMPARISON_CONFIGS = {
         "agent_1_type": "bc",
         "agent_0_source": "ppo_sp_opt",
         "agent_1_source": "hp",
+        "agent_1_source_split": "test",
         "color": "#17BECF",  # Cyan
         "style": "bar",
     },
@@ -186,6 +195,18 @@ GAIL_COMPARISON_CONFIGS = {
     "ppo_hp_hp": FIGURE_4A_CONFIGS["ppo_hp_hp"],
     # BC baseline for reference
     "bc_hp": FIGURE_4A_CONFIGS["bc_hp"],
+}
+
+DEFAULT_RUN_NAME_TEMPLATES = {
+    "ppo_sp": "ppo_sp__layout-{layout}",
+    "ppo_bc": "ppo_bc__partner-bc_train__layout-{layout}",
+    "ppo_hp": "ppo_hp__layout-{layout}",
+}
+
+DEFAULT_AGENT_DIRS = {
+    "ppo_sp": "ppo_agent",
+    "ppo_bc": "ppo_bc_agent",
+    "ppo_hp": "ppo_hp_agent",
 }
 
 # Combined configs for full evaluation
@@ -230,6 +251,29 @@ def find_checkpoint(base_dir: str, layout: str, seed: Optional[int] = None) -> O
     return None
 
 
+def find_checkpoint_from_run(
+    ppo_data_dir: str,
+    run_name_template: str,
+    layout: str,
+    seed: int,
+    agent_name: str,
+) -> Optional[str]:
+    """Resolve checkpoint from canonical ppo_runs run/seed/agent structure."""
+    run_name = format_run_template(run_name_template, layout)
+    agent_dir = os.path.join(
+        ppo_data_dir,
+        run_name,
+        f"seed{seed}",
+        agent_name,
+    )
+    if not os.path.isdir(agent_dir):
+        return None
+    checkpoints = [d for d in os.listdir(agent_dir) if d.startswith("checkpoint")]
+    if not checkpoints:
+        return None
+    return os.path.join(agent_dir, sorted(checkpoints)[-1])
+
+
 def evaluate_paper_config(
     config_name: str,
     layout: str,
@@ -245,6 +289,10 @@ def evaluate_paper_config(
     num_games: int = 10,
     seed: Optional[int] = None,
     agent_order: int = 0,  # 0 = normal order, 1 = swapped
+    ppo_data_dir: Optional[str] = None,
+    run_name_templates: Optional[Dict[str, str]] = None,
+    agent_dirs: Optional[Dict[str, str]] = None,
+    prefer_run_registry: bool = True,
 ) -> Dict[str, Any]:
     """
     Evaluate a single paper configuration.
@@ -276,6 +324,12 @@ def evaluate_paper_config(
         bc_dir = os.path.join(BC_SAVE_DIR, "train")
     if hp_dir is None:
         hp_dir = os.path.join(BC_SAVE_DIR, "test")
+    if ppo_data_dir is None:
+        ppo_data_dir = default_ppo_data_dir()
+    if run_name_templates is None:
+        run_name_templates = DEFAULT_RUN_NAME_TEMPLATES
+    if agent_dirs is None:
+        agent_dirs = DEFAULT_AGENT_DIRS
     
     # Determine agent indices based on order
     if agent_order == 0:
@@ -285,20 +339,35 @@ def evaluate_paper_config(
     
     # Load agents
     def load_agent(agent_type: str, source: str, agent_index: int):
+        run_template = run_name_templates.get(source)
+        run_agent_name = agent_dirs.get(source)
+        checkpoint = None
+        if prefer_run_registry and run_template and run_agent_name and seed is not None:
+            checkpoint = find_checkpoint_from_run(
+                ppo_data_dir=ppo_data_dir,
+                run_name_template=run_template,
+                layout=layout,
+                seed=seed,
+                agent_name=run_agent_name,
+            )
+
         if source == "ppo_sp":
-            checkpoint = find_checkpoint(ppo_sp_dir, layout, seed)
+            if checkpoint is None:
+                checkpoint = find_checkpoint(ppo_sp_dir, layout, seed)
             if checkpoint is None:
                 raise FileNotFoundError(f"No PPO_SP checkpoint found for {layout}")
             return load_jax_agent(checkpoint, env_layout, agent_index)
         
         elif source == "ppo_bc":
-            checkpoint = find_checkpoint(ppo_bc_dir, layout, seed)
+            if checkpoint is None:
+                checkpoint = find_checkpoint(ppo_bc_dir, layout, seed)
             if checkpoint is None:
                 raise FileNotFoundError(f"No PPO_BC checkpoint found for {layout}")
             return load_jax_agent(checkpoint, env_layout, agent_index)
         
         elif source == "ppo_hp":
-            checkpoint = find_checkpoint(ppo_hp_dir, layout, seed)
+            if checkpoint is None:
+                checkpoint = find_checkpoint(ppo_hp_dir, layout, seed)
             if checkpoint is None:
                 raise FileNotFoundError(f"No PPO_HP checkpoint found for {layout}")
             return load_jax_agent(checkpoint, env_layout, agent_index)
@@ -358,6 +427,10 @@ def evaluate_figure_4a(
     seeds: Optional[List[int]] = None,
     num_games: int = 10,
     verbose: bool = True,
+    ppo_data_dir: Optional[str] = None,
+    run_name_templates: Optional[Dict[str, str]] = None,
+    agent_dirs: Optional[Dict[str, str]] = None,
+    prefer_run_registry: bool = True,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """
     Run Figure 4(a) evaluations (Self-Play comparison).
@@ -396,6 +469,10 @@ def evaluate_figure_4a(
         num_games=num_games,
         verbose=verbose,
         figure_name="Figure 4(a) - Self-Play Comparison",
+        ppo_data_dir=ppo_data_dir,
+        run_name_templates=run_name_templates,
+        agent_dirs=agent_dirs,
+        prefer_run_registry=prefer_run_registry,
     )
 
 
@@ -409,6 +486,10 @@ def evaluate_figure_4b(
     seeds: Optional[List[int]] = None,
     num_games: int = 10,
     verbose: bool = True,
+    ppo_data_dir: Optional[str] = None,
+    run_name_templates: Optional[Dict[str, str]] = None,
+    agent_dirs: Optional[Dict[str, str]] = None,
+    prefer_run_registry: bool = True,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """
     Run Figure 4(b) evaluations (PBT comparison).
@@ -447,6 +528,10 @@ def evaluate_figure_4b(
         num_games=num_games,
         verbose=verbose,
         figure_name="Figure 4(b) - PBT Comparison",
+        ppo_data_dir=ppo_data_dir,
+        run_name_templates=run_name_templates,
+        agent_dirs=agent_dirs,
+        prefer_run_registry=prefer_run_registry,
     )
 
 
@@ -462,6 +547,10 @@ def evaluate_gail_comparison(
     seeds: Optional[List[int]] = None,
     num_games: int = 50,
     verbose: bool = True,
+    ppo_data_dir: Optional[str] = None,
+    run_name_templates: Optional[Dict[str, str]] = None,
+    agent_dirs: Optional[Dict[str, str]] = None,
+    prefer_run_registry: bool = True,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """
     Run GAIL comparison evaluations.
@@ -518,6 +607,10 @@ def evaluate_gail_comparison(
         ppo_gail_dir=ppo_gail_dir,
         ppo_gail_opt_dir=ppo_gail_opt_dir,
         ppo_sp_opt_dir=ppo_sp_opt_dir,
+        ppo_data_dir=ppo_data_dir,
+        run_name_templates=run_name_templates,
+        agent_dirs=agent_dirs,
+        prefer_run_registry=prefer_run_registry,
     )
 
 
@@ -537,6 +630,10 @@ def _run_evaluations(
     ppo_gail_dir: str = "results/ppo_gail",
     ppo_gail_opt_dir: str = "results/ppo_gail_opt",
     ppo_sp_opt_dir: str = "results/ppo_sp_opt",
+    ppo_data_dir: Optional[str] = None,
+    run_name_templates: Optional[Dict[str, str]] = None,
+    agent_dirs: Optional[Dict[str, str]] = None,
+    prefer_run_registry: bool = True,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Internal helper to run evaluations."""
     all_results = {}
@@ -574,6 +671,10 @@ def _run_evaluations(
                             num_games=num_games,
                             seed=seed,
                             agent_order=order,
+                            ppo_data_dir=ppo_data_dir,
+                            run_name_templates=run_name_templates,
+                            agent_dirs=agent_dirs,
+                            prefer_run_registry=prefer_run_registry,
                         )
                         config_results[f"order_{order}"].append(result)
                         
@@ -629,6 +730,10 @@ def evaluate_all_paper_experiments(
     seeds: Optional[List[int]] = None,
     num_games: int = 10,
     verbose: bool = True,
+    ppo_data_dir: Optional[str] = None,
+    run_name_templates: Optional[Dict[str, str]] = None,
+    agent_dirs: Optional[Dict[str, str]] = None,
+    prefer_run_registry: bool = True,
 ) -> Dict[str, Any]:
     """
     Run all paper evaluations for Figure 4(a), 4(b), and GAIL comparison.
@@ -649,6 +754,10 @@ def evaluate_all_paper_experiments(
         seeds=seeds,
         num_games=num_games,
         verbose=verbose,
+        ppo_data_dir=ppo_data_dir,
+        run_name_templates=run_name_templates,
+        agent_dirs=agent_dirs,
+        prefer_run_registry=prefer_run_registry,
     )
     
     # Figure 4(b) - PBT comparison
@@ -662,6 +771,10 @@ def evaluate_all_paper_experiments(
         seeds=seeds,
         num_games=num_games,
         verbose=verbose,
+        ppo_data_dir=ppo_data_dir,
+        run_name_templates=run_name_templates,
+        agent_dirs=agent_dirs,
+        prefer_run_registry=prefer_run_registry,
     )
     
     # GAIL comparison (fair partner-model ablation)
@@ -677,6 +790,10 @@ def evaluate_all_paper_experiments(
         seeds=seeds,
         num_games=50,  # 50+ games for conference-grade evaluation
         verbose=verbose,
+        ppo_data_dir=ppo_data_dir,
+        run_name_templates=run_name_templates,
+        agent_dirs=agent_dirs,
+        prefer_run_registry=prefer_run_registry,
     )
     
     # Add config metadata for plotting
@@ -813,6 +930,53 @@ def main():
         default=None,
         help="Directory with Human Proxy models (default: BC_SAVE_DIR/test)"
     )
+    parser.add_argument(
+        "--ppo_data_dir",
+        type=str,
+        default=default_ppo_data_dir(),
+        help="Canonical PPO run directory (DATA_DIR/ppo_runs)"
+    )
+    parser.add_argument(
+        "--run_name_sp",
+        type=str,
+        default=DEFAULT_RUN_NAME_TEMPLATES["ppo_sp"],
+        help="Run-name template for PPO_SP (supports {layout})"
+    )
+    parser.add_argument(
+        "--run_name_bc",
+        type=str,
+        default=DEFAULT_RUN_NAME_TEMPLATES["ppo_bc"],
+        help="Run-name template for PPO_BC (supports {layout})"
+    )
+    parser.add_argument(
+        "--run_name_hp",
+        type=str,
+        default=DEFAULT_RUN_NAME_TEMPLATES["ppo_hp"],
+        help="Run-name template for PPO_HP (supports {layout})"
+    )
+    parser.add_argument(
+        "--agent_dir_sp",
+        type=str,
+        default=DEFAULT_AGENT_DIRS["ppo_sp"],
+        help="Agent subdirectory name for PPO_SP runs"
+    )
+    parser.add_argument(
+        "--agent_dir_bc",
+        type=str,
+        default=DEFAULT_AGENT_DIRS["ppo_bc"],
+        help="Agent subdirectory name for PPO_BC runs"
+    )
+    parser.add_argument(
+        "--agent_dir_hp",
+        type=str,
+        default=DEFAULT_AGENT_DIRS["ppo_hp"],
+        help="Agent subdirectory name for PPO_HP runs"
+    )
+    parser.add_argument(
+        "--disable_run_registry",
+        action="store_true",
+        help="Disable deterministic run_name/seed loading and use legacy directory scans first"
+    )
     
     parser.add_argument(
         "--output_file",
@@ -861,6 +1025,17 @@ def main():
     layouts = args.layouts.split(",") if args.layouts else None
     seeds = [int(s) for s in args.seeds.split(",")]
     verbose = not args.quiet
+    run_name_templates = {
+        "ppo_sp": args.run_name_sp,
+        "ppo_bc": args.run_name_bc,
+        "ppo_hp": args.run_name_hp,
+    }
+    agent_dirs = {
+        "ppo_sp": args.agent_dir_sp,
+        "ppo_bc": args.agent_dir_bc,
+        "ppo_hp": args.agent_dir_hp,
+    }
+    prefer_run_registry = not args.disable_run_registry
     
     if args.figure == "all":
         results = evaluate_all_paper_experiments(
@@ -877,6 +1052,10 @@ def main():
             seeds=seeds,
             num_games=args.num_games,
             verbose=verbose,
+            ppo_data_dir=args.ppo_data_dir,
+            run_name_templates=run_name_templates,
+            agent_dirs=agent_dirs,
+            prefer_run_registry=prefer_run_registry,
         )
     elif args.figure == "4a":
         results = {
@@ -890,6 +1069,10 @@ def main():
                 seeds=seeds,
                 num_games=args.num_games,
                 verbose=verbose,
+                ppo_data_dir=args.ppo_data_dir,
+                run_name_templates=run_name_templates,
+                agent_dirs=agent_dirs,
+                prefer_run_registry=prefer_run_registry,
             )
         }
     elif args.figure == "4b":
@@ -904,6 +1087,10 @@ def main():
                 seeds=seeds,
                 num_games=args.num_games,
                 verbose=verbose,
+                ppo_data_dir=args.ppo_data_dir,
+                run_name_templates=run_name_templates,
+                agent_dirs=agent_dirs,
+                prefer_run_registry=prefer_run_registry,
             )
         }
     elif args.figure == "gail":
@@ -920,6 +1107,10 @@ def main():
                 seeds=seeds,
                 num_games=args.num_games if args.num_games != 10 else 50,  # Default 50 for GAIL
                 verbose=verbose,
+                ppo_data_dir=args.ppo_data_dir,
+                run_name_templates=run_name_templates,
+                agent_dirs=agent_dirs,
+                prefer_run_registry=prefer_run_registry,
             )
         }
     

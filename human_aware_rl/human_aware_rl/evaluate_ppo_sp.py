@@ -53,12 +53,15 @@ def evaluate_ppo_sp_self_play(layout_name, run_name, seeds, num_games=10, displa
     
     for seed in seeds:
         try:
-            agent, config = get_ppo_agent(run_name, seed=seed, best=False)
+            agent, config = get_ppo_agent(run_name, seed=seed, best=True)
             
             # Create evaluator from config
+            env_params = dict(config["env_params"])
+            # Match paper evaluation protocol (400-step horizon).
+            env_params["horizon"] = 400
             evaluator = AgentEvaluator(
-                mdp_params=config["mdp_params"], 
-                env_params=config["env_params"]
+                mdp_params=config["mdp_params"],
+                env_params=env_params
             )
             
             # Self-play evaluation

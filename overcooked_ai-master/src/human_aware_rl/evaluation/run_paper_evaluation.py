@@ -28,6 +28,7 @@ from typing import Dict, List, Optional, Any
 
 from human_aware_rl.ppo.configs.paper_configs import PAPER_LAYOUTS
 from human_aware_rl.imitation.behavior_cloning import BC_SAVE_DIR
+from human_aware_rl.ppo.run_paths import default_ppo_data_dir, format_run_template
 
 
 # Default directories
@@ -36,15 +37,69 @@ DEFAULT_DIRS = {
     "ppo_bc": "results/ppo_bc",
     "ppo_hp": "results/ppo_hp",
     "pbt": "results/pbt",
+    "ppo_data_dir": default_ppo_data_dir(),
     "bc": os.path.join(BC_SAVE_DIR, "train"),
     "hp": os.path.join(BC_SAVE_DIR, "test"),
 }
+
+DEFAULT_RUN_NAME_TEMPLATES = {
+    "ppo_sp": "ppo_sp__layout-{layout}",
+    "ppo_bc": "ppo_bc__partner-bc_train__layout-{layout}",
+    "ppo_hp": "ppo_hp__layout-{layout}",
+}
+
+DEFAULT_AGENT_DIRS = {
+    "ppo_sp": "ppo_agent",
+    "ppo_bc": "ppo_bc_agent",
+    "ppo_hp": "ppo_hp_agent",
+}
+
+
+def _has_checkpoint_under_agent_dir(agent_dir: str) -> bool:
+    if not os.path.isdir(agent_dir):
+        return False
+    return any(name.startswith("checkpoint") for name in os.listdir(agent_dir))
+
+
+def _has_checkpoint_for_layout(
+    *,
+    model_type: str,
+    layout: str,
+    seed: int,
+    dirs: Dict[str, str],
+    run_name_templates: Dict[str, str],
+    agent_dirs: Dict[str, str],
+) -> bool:
+    # Canonical ppo_runs path first
+    run_template = run_name_templates.get(model_type)
+    agent_name = agent_dirs.get(model_type)
+    ppo_data_dir = dirs.get("ppo_data_dir")
+    if run_template and agent_name and ppo_data_dir:
+        run_name = format_run_template(run_template, layout)
+        agent_dir = os.path.join(ppo_data_dir, run_name, f"seed{seed}", agent_name)
+        if _has_checkpoint_under_agent_dir(agent_dir):
+            return True
+
+    # Legacy fallback: scan base directory
+    base_dir = dirs.get(model_type, "")
+    if not os.path.isdir(base_dir):
+        return False
+    for exp_name in os.listdir(base_dir):
+        if layout in exp_name:
+            exp_dir = os.path.join(base_dir, exp_name)
+            if os.path.isdir(exp_dir):
+                checkpoints = [d for d in os.listdir(exp_dir) if d.startswith("checkpoint")]
+                if checkpoints:
+                    return True
+    return False
 
 
 def check_model_availability(
     layouts: List[str] = None,
     seeds: List[int] = None,
     dirs: Dict[str, str] = None,
+    run_name_templates: Dict[str, str] = None,
+    agent_dirs: Dict[str, str] = None,
     verbose: bool = True,
 ) -> Dict[str, Dict[str, bool]]:
     """
@@ -65,6 +120,10 @@ def check_model_availability(
         seeds = [0, 10, 20, 30, 40]
     if dirs is None:
         dirs = DEFAULT_DIRS
+    if run_name_templates is None:
+        run_name_templates = DEFAULT_RUN_NAME_TEMPLATES
+    if agent_dirs is None:
+        agent_dirs = DEFAULT_AGENT_DIRS
     
     availability = {}
     
@@ -83,19 +142,18 @@ def check_model_availability(
     # Check PPO models (need at least one seed)
     for model_type in ["ppo_sp", "ppo_bc", "ppo_hp", "pbt"]:
         availability[model_type] = {}
-        base_dir = dirs[model_type]
-        
         for layout in layouts:
-            found = False
-            if os.path.exists(base_dir):
-                for exp_name in os.listdir(base_dir):
-                    if layout in exp_name:
-                        exp_dir = os.path.join(base_dir, exp_name)
-                        if os.path.isdir(exp_dir):
-                            checkpoints = [d for d in os.listdir(exp_dir) if d.startswith("checkpoint")]
-                            if checkpoints:
-                                found = True
-                                break
+            found = any(
+                _has_checkpoint_for_layout(
+                    model_type=model_type,
+                    layout=layout,
+                    seed=seed,
+                    dirs=dirs,
+                    run_name_templates=run_name_templates,
+                    agent_dirs=agent_dirs,
+                )
+                for seed in seeds
+            )
             availability[model_type][layout] = found
     
     if verbose:
@@ -159,6 +217,8 @@ def run_evaluation(
     layouts: List[str] = None,
     seeds: List[int] = None,
     dirs: Dict[str, str] = None,
+    run_name_templates: Dict[str, str] = None,
+    agent_dirs: Dict[str, str] = None,
     num_games: int = 10,
     output_file: str = "paper_results.json",
     verbose: bool = True,
@@ -190,6 +250,10 @@ def run_evaluation(
         seeds = [0, 10, 20, 30, 40]
     if dirs is None:
         dirs = DEFAULT_DIRS
+    if run_name_templates is None:
+        run_name_templates = DEFAULT_RUN_NAME_TEMPLATES
+    if agent_dirs is None:
+        agent_dirs = DEFAULT_AGENT_DIRS
     
     results = {}
     
@@ -209,6 +273,10 @@ def run_evaluation(
             seeds=seeds,
             num_games=num_games,
             verbose=verbose,
+            ppo_data_dir=dirs["ppo_data_dir"],
+            run_name_templates=run_name_templates,
+            agent_dirs=agent_dirs,
+            prefer_run_registry=True,
         )
     
     if figure in ["all", "4b"]:
@@ -227,6 +295,10 @@ def run_evaluation(
             seeds=seeds,
             num_games=num_games,
             verbose=verbose,
+            ppo_data_dir=dirs["ppo_data_dir"],
+            run_name_templates=run_name_templates,
+            agent_dirs=agent_dirs,
+            prefer_run_registry=True,
         )
     
     # Save results
@@ -358,12 +430,19 @@ def main():
     )
     
     # Directory overrides
+    parser.add_argument("--ppo_data_dir", type=str, default=DEFAULT_DIRS["ppo_data_dir"])
     parser.add_argument("--ppo_sp_dir", type=str, default=DEFAULT_DIRS["ppo_sp"])
     parser.add_argument("--ppo_bc_dir", type=str, default=DEFAULT_DIRS["ppo_bc"])
     parser.add_argument("--ppo_hp_dir", type=str, default=DEFAULT_DIRS["ppo_hp"])
     parser.add_argument("--pbt_dir", type=str, default=DEFAULT_DIRS["pbt"])
     parser.add_argument("--bc_dir", type=str, default=DEFAULT_DIRS["bc"])
     parser.add_argument("--hp_dir", type=str, default=DEFAULT_DIRS["hp"])
+    parser.add_argument("--run_name_sp", type=str, default=DEFAULT_RUN_NAME_TEMPLATES["ppo_sp"])
+    parser.add_argument("--run_name_bc", type=str, default=DEFAULT_RUN_NAME_TEMPLATES["ppo_bc"])
+    parser.add_argument("--run_name_hp", type=str, default=DEFAULT_RUN_NAME_TEMPLATES["ppo_hp"])
+    parser.add_argument("--agent_dir_sp", type=str, default=DEFAULT_AGENT_DIRS["ppo_sp"])
+    parser.add_argument("--agent_dir_bc", type=str, default=DEFAULT_AGENT_DIRS["ppo_bc"])
+    parser.add_argument("--agent_dir_hp", type=str, default=DEFAULT_AGENT_DIRS["ppo_hp"])
     
     parser.add_argument(
         "--quiet",
@@ -378,6 +457,7 @@ def main():
     seeds = [int(s) for s in args.seeds.split(",")]
     
     dirs = {
+        "ppo_data_dir": args.ppo_data_dir,
         "ppo_sp": args.ppo_sp_dir,
         "ppo_bc": args.ppo_bc_dir,
         "ppo_hp": args.ppo_hp_dir,
@@ -385,12 +465,24 @@ def main():
         "bc": args.bc_dir,
         "hp": args.hp_dir,
     }
+    run_name_templates = {
+        "ppo_sp": args.run_name_sp,
+        "ppo_bc": args.run_name_bc,
+        "ppo_hp": args.run_name_hp,
+    }
+    agent_dirs = {
+        "ppo_sp": args.agent_dir_sp,
+        "ppo_bc": args.agent_dir_bc,
+        "ppo_hp": args.agent_dir_hp,
+    }
     
     # Check model availability
     availability = check_model_availability(
         layouts=layouts or PAPER_LAYOUTS,
         seeds=seeds,
         dirs=dirs,
+        run_name_templates=run_name_templates,
+        agent_dirs=agent_dirs,
         verbose=verbose,
     )
     
@@ -413,6 +505,8 @@ def main():
             layouts=layouts,
             seeds=seeds,
             dirs=dirs,
+            run_name_templates=run_name_templates,
+            agent_dirs=agent_dirs,
             num_games=args.num_games,
             output_file=args.results_file,
             verbose=verbose,

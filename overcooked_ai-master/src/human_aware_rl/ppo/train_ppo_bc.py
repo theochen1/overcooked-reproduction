@@ -21,7 +21,6 @@ import argparse
 import os
 import sys
 import json
-from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 
 import numpy as np
@@ -39,6 +38,11 @@ from human_aware_rl.ppo.configs.paper_configs import (
     PAPER_PPO_BC_CONFIGS,
 )
 from human_aware_rl.imitation.behavior_cloning import BC_SAVE_DIR
+from human_aware_rl.ppo.run_paths import (
+    build_run_name,
+    build_training_output_paths,
+    default_ppo_data_dir,
+)
 
 
 # Layout mapping for PPO BC: Use LEGACY layouts (same as PPO SP)
@@ -60,12 +64,25 @@ DEFAULT_BC_MODEL_PATHS = {
     for layout in PAPER_LAYOUTS
 }
 
+PARTNER_TYPE_TO_SPLIT = {
+    "bc_train": "train",
+    "bc_test": "test",
+}
+
+DEFAULT_AGENT_NAME = "ppo_bc_agent"
+
 
 def train_ppo_bc(
     layout: str,
     seed: int = 0,
     bc_model_dir: Optional[str] = None,
-    results_dir: str = "results",
+    results_dir: Optional[str] = None,
+    use_legacy_results_layout: bool = False,
+    ex_name: Optional[str] = None,
+    timestamp_dir: bool = False,
+    ppo_data_dir: Optional[str] = None,
+    partner_type: str = "bc_train",
+    agent_name: str = DEFAULT_AGENT_NAME,
     verbose: bool = True,
     use_wandb: bool = False,
     wandb_project: str = "overcooked-ai",
@@ -78,7 +95,13 @@ def train_ppo_bc(
         layout: Layout name (paper name, e.g., 'cramped_room')
         seed: Random seed
         bc_model_dir: Path to BC model directory (default: use default path)
-        results_dir: Directory to save results
+        results_dir: Legacy output directory. Ignored unless use_legacy_results_layout=True.
+        use_legacy_results_layout: If True, use legacy results_dir/experiment_name layout.
+        ex_name: Experiment/run name (used in DATA_DIR/ppo_runs layout)
+        timestamp_dir: Prefix run directory with timestamp
+        ppo_data_dir: Base directory for canonical ppo_runs storage
+        partner_type: Which BC split to use (bc_train or bc_test)
+        agent_name: Agent subdirectory name under each seed dir
         verbose: Whether to print progress
         use_wandb: Whether to use Weights & Biases logging
         wandb_project: WandB project name
@@ -95,9 +118,16 @@ def train_ppo_bc(
     
     from human_aware_rl.jaxmarl.ppo import PPOConfig, PPOTrainer
     
+    if partner_type not in PARTNER_TYPE_TO_SPLIT:
+        raise ValueError(
+            f"Unknown partner_type '{partner_type}'. "
+            f"Expected one of: {list(PARTNER_TYPE_TO_SPLIT.keys())}"
+        )
+
     # Use default BC model path if not specified
     if bc_model_dir is None:
-        bc_model_dir = DEFAULT_BC_MODEL_PATHS.get(layout)
+        split = PARTNER_TYPE_TO_SPLIT[partner_type]
+        bc_model_dir = os.path.join(BC_SAVE_DIR, split, layout)
         if bc_model_dir is None:
             raise ValueError(f"No default BC model path for layout: {layout}")
     
@@ -114,7 +144,6 @@ def train_ppo_bc(
         layout=layout,
         seed=seed,
         bc_model_dir=bc_model_dir,
-        results_dir=results_dir,
         verbose=verbose,
         **overrides
     )
@@ -123,12 +152,33 @@ def train_ppo_bc(
     # BC models are trained on original layouts, PPO BC must use the same
     config_dict["layout_name"] = LAYOUT_TO_ENV_BC.get(layout, layout)
     
+    # Canonical run naming/layout mirrors deprecated repo:
+    #   DATA_DIR/ppo_runs/<run_name>/seed<seed>/<agent_name>/checkpoint_*
+    if ex_name is None:
+        ex_name = f"ppo_bc__partner-{partner_type}__layout-{layout}"
+    resolved_run_name = build_run_name(ex_name, timestamp_dir=timestamp_dir)
+    ppo_data_dir = ppo_data_dir or default_ppo_data_dir()
+    output_paths = build_training_output_paths(
+        ppo_data_dir=ppo_data_dir,
+        run_name=resolved_run_name,
+        seed=seed,
+        agent_name=agent_name,
+    )
+
+    trainer_results_dir = output_paths["trainer_results_dir"]
+    trainer_experiment_name = output_paths["trainer_experiment_name"]
+
+    if use_legacy_results_layout and results_dir:
+        trainer_results_dir = results_dir
+        trainer_experiment_name = config_dict["experiment_name"]
+
     if verbose:
         print("\n" + "="*60)
         print(f"Training PPO with BC Partner (Paper Table 3)")
         print("="*60)
         print(f"Layout: {layout} -> {config_dict['layout_name']}")
         print(f"Seed: {seed}")
+        print(f"Partner type: {partner_type}")
         print(f"BC model: {bc_model_dir}")
         print(f"Total timesteps: {config_dict['total_timesteps']:,}")
         print(f"Learning rate: {config_dict['learning_rate']}")
@@ -147,7 +197,10 @@ def train_ppo_bc(
         print(f"Clip epsilon end: {config_dict.get('clip_eps_end', 0.0)}")
         print(f"Clip end fraction: {config_dict.get('clip_end_fraction', 1.0)}")
         print(f"BC schedule: {config_dict['bc_schedule']}")
-        print(f"Results dir: {results_dir}")
+        print(f"Run name: {resolved_run_name}")
+        print(f"PPO data dir: {ppo_data_dir}")
+        print(f"Seed dir: {output_paths['seed_dir']}")
+        print(f"Agent dir: {output_paths['agent_dir']}")
         print("="*60 + "\n")
     
     # Initialize WandB if enabled
@@ -219,8 +272,8 @@ def train_ppo_bc(
         bc_schedule=bc_schedule_tuples,
         bc_model_dir=bc_model_dir,
         verbose=verbose,
-        results_dir=results_dir,
-        experiment_name=config_dict["experiment_name"],
+        results_dir=trainer_results_dir,
+        experiment_name=trainer_experiment_name,
         seed=seed,
     )
     
@@ -230,8 +283,8 @@ def train_ppo_bc(
     
     # Save final config
     config_path = os.path.join(
-        results_dir,
-        config_dict["experiment_name"],
+        trainer_results_dir,
+        trainer_experiment_name,
         "config.json"
     )
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
@@ -240,6 +293,12 @@ def train_ppo_bc(
                        if not callable(v) and k != "bc_schedule"}
         json_config["bc_schedule"] = str(bc_schedule_tuples)
         json_config["bc_model_dir"] = bc_model_dir
+        json_config["partner_type"] = partner_type
+        json_config["agent_name"] = trainer_experiment_name
+        json_config["seed_dir"] = output_paths["seed_dir"]
+        json_config["run_name"] = resolved_run_name
+        json_config["ppo_data_dir"] = ppo_data_dir
+        json_config["legacy_results_layout"] = use_legacy_results_layout
         json.dump(json_config, f, indent=2)
     
     # Finish WandB
@@ -252,7 +311,13 @@ def train_ppo_bc(
 def train_all_layouts(
     seeds: List[int],
     layouts: Optional[List[str]] = None,
-    results_dir: str = "results",
+    results_dir: Optional[str] = None,
+    use_legacy_results_layout: bool = False,
+    ex_name_prefix: Optional[str] = None,
+    timestamp_dir: bool = False,
+    ppo_data_dir: Optional[str] = None,
+    partner_type: str = "bc_train",
+    agent_name: str = DEFAULT_AGENT_NAME,
     verbose: bool = True,
     use_wandb: bool = False,
     wandb_project: str = "overcooked-ai",
@@ -303,6 +368,16 @@ def train_all_layouts(
                     seed=seed,
                     bc_model_dir=bc_model_dir,
                     results_dir=results_dir,
+                    use_legacy_results_layout=use_legacy_results_layout,
+                    ex_name=(
+                        f"{ex_name_prefix}__layout-{layout}"
+                        if ex_name_prefix
+                        else f"ppo_bc__partner-{partner_type}__layout-{layout}"
+                    ),
+                    timestamp_dir=timestamp_dir,
+                    ppo_data_dir=ppo_data_dir,
+                    partner_type=partner_type,
+                    agent_name=agent_name,
                     verbose=verbose,
                     use_wandb=use_wandb,
                     wandb_project=wandb_project,
@@ -391,8 +466,43 @@ def main():
     parser.add_argument(
         "--results_dir",
         type=str,
-        default="results/ppo_bc",
-        help="Directory to save results"
+        default=None,
+        help="Legacy output directory (ignored unless --use_legacy_results_layout)"
+    )
+    parser.add_argument(
+        "--use_legacy_results_layout",
+        action="store_true",
+        help="Use legacy results_dir/experiment_name layout instead of DATA_DIR/ppo_runs"
+    )
+    parser.add_argument(
+        "--ex_name",
+        type=str,
+        default=None,
+        help="Deprecated-style experiment name (run directory name without timestamp)"
+    )
+    parser.add_argument(
+        "--timestamp_dir",
+        action="store_true",
+        help="Prefix run directory with timestamp"
+    )
+    parser.add_argument(
+        "--ppo_data_dir",
+        type=str,
+        default=None,
+        help="Base PPO run directory (default: DATA_DIR/ppo_runs)"
+    )
+    parser.add_argument(
+        "--partner_type",
+        type=str,
+        choices=["bc_train", "bc_test"],
+        default="bc_train",
+        help="Partner split: bc_train (train demos) or bc_test (test demos / HP)"
+    )
+    parser.add_argument(
+        "--agent_name",
+        type=str,
+        default=DEFAULT_AGENT_NAME,
+        help="Agent subdirectory name under each seed directory"
     )
     
     parser.add_argument(
@@ -495,6 +605,12 @@ def main():
             seed=args.seed,
             bc_model_dir=bc_model_dir,
             results_dir=args.results_dir,
+            use_legacy_results_layout=args.use_legacy_results_layout,
+            ex_name=args.ex_name or f"ppo_bc__partner-{args.partner_type}__layout-{args.layout}",
+            timestamp_dir=args.timestamp_dir,
+            ppo_data_dir=args.ppo_data_dir,
+            partner_type=args.partner_type,
+            agent_name=args.agent_name,
             verbose=verbose,
             use_wandb=args.use_wandb,
             wandb_project=args.wandb_project,
@@ -508,6 +624,12 @@ def main():
             seeds=seeds,
             layouts=PAPER_LAYOUTS,
             results_dir=args.results_dir,
+            use_legacy_results_layout=args.use_legacy_results_layout,
+            ex_name_prefix=args.ex_name,
+            timestamp_dir=args.timestamp_dir,
+            ppo_data_dir=args.ppo_data_dir,
+            partner_type=args.partner_type,
+            agent_name=args.agent_name,
             verbose=verbose,
             use_wandb=args.use_wandb,
             wandb_project=args.wandb_project,

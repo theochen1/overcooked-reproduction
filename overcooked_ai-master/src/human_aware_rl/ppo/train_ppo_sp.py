@@ -19,7 +19,6 @@ import argparse
 import os
 import sys
 import json
-from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 import numpy as np
@@ -37,12 +36,24 @@ from human_aware_rl.ppo.configs.paper_configs import (
     get_ppo_sp_config,
     PAPER_PPO_SP_CONFIGS,
 )
+from human_aware_rl.ppo.run_paths import (
+    build_run_name,
+    build_training_output_paths,
+    default_ppo_data_dir,
+)
+
+DEFAULT_AGENT_NAME = "ppo_agent"
 
 
 def train_ppo_sp(
     layout: str,
     seed: int = 0,
-    results_dir: str = "results",
+    results_dir: Optional[str] = None,
+    use_legacy_results_layout: bool = False,
+    ex_name: Optional[str] = None,
+    timestamp_dir: bool = False,
+    ppo_data_dir: Optional[str] = None,
+    agent_name: str = DEFAULT_AGENT_NAME,
     verbose: bool = True,
     use_wandb: bool = False,
     wandb_project: str = "overcooked-ai",
@@ -54,7 +65,12 @@ def train_ppo_sp(
     Args:
         layout: Layout name (paper name, e.g., 'cramped_room')
         seed: Random seed
-        results_dir: Directory to save results
+        results_dir: Legacy output directory. Ignored unless use_legacy_results_layout=True.
+        use_legacy_results_layout: If True, use legacy results_dir/experiment_name layout.
+        ex_name: Experiment/run name (used in DATA_DIR/ppo_runs layout)
+        timestamp_dir: Prefix run directory with timestamp
+        ppo_data_dir: Base directory for canonical ppo_runs storage
+        agent_name: Agent subdirectory name under each seed dir
         verbose: Whether to print progress
         use_wandb: Whether to use Weights & Biases logging
         wandb_project: WandB project name
@@ -75,10 +91,25 @@ def train_ppo_sp(
     config_dict = get_ppo_sp_config(
         layout=layout,
         seed=seed,
-        results_dir=results_dir,
         verbose=verbose,
         **overrides
     )
+
+    if ex_name is None:
+        ex_name = f"ppo_sp__layout-{layout}"
+    resolved_run_name = build_run_name(ex_name, timestamp_dir=timestamp_dir)
+    ppo_data_dir = ppo_data_dir or default_ppo_data_dir()
+    output_paths = build_training_output_paths(
+        ppo_data_dir=ppo_data_dir,
+        run_name=resolved_run_name,
+        seed=seed,
+        agent_name=agent_name,
+    )
+    trainer_results_dir = output_paths["trainer_results_dir"]
+    trainer_experiment_name = output_paths["trainer_experiment_name"]
+    if use_legacy_results_layout and results_dir:
+        trainer_results_dir = results_dir
+        trainer_experiment_name = config_dict["experiment_name"]
     
     if verbose:
         print("\n" + "="*60)
@@ -100,7 +131,10 @@ def train_ppo_sp(
         print(f"Reward shaping horizon: {config_dict.get('reward_shaping_horizon', 2.5e6):.0e}")
         print(f"Legacy encoding: {config_dict.get('use_legacy_encoding', False)}")
         print(f"Old dynamics: {config_dict.get('old_dynamics', True)}")
-        print(f"Results dir: {results_dir}")
+        print(f"Run name: {resolved_run_name}")
+        print(f"PPO data dir: {ppo_data_dir}")
+        print(f"Seed dir: {output_paths['seed_dir']}")
+        print(f"Agent dir: {output_paths['agent_dir']}")
         print("="*60 + "\n")
     
     # #region agent log
@@ -196,8 +230,8 @@ def train_ppo_sp(
         verbose_debug=config_dict.get("verbose_debug", False),
         grad_diagnostics=config_dict.get("grad_diagnostics", False),
         verbose=verbose,
-        results_dir=results_dir,
-        experiment_name=config_dict["experiment_name"],
+        results_dir=trainer_results_dir,
+        experiment_name=trainer_experiment_name,
         seed=seed,
     )
     
@@ -206,7 +240,7 @@ def train_ppo_sp(
     results = trainer.train()
     
     # Save final config
-    run_dir = os.path.join(results_dir, config_dict["experiment_name"])
+    run_dir = os.path.join(trainer_results_dir, trainer_experiment_name)
     os.makedirs(run_dir, exist_ok=True)
     
     config_path = os.path.join(run_dir, "config.json")
@@ -215,6 +249,11 @@ def train_ppo_sp(
         json_config = {k: v for k, v in config_dict.items() 
                        if not callable(v) and k != "bc_schedule"}
         json_config["bc_schedule"] = str(config_dict.get("bc_schedule", []))
+        json_config["agent_name"] = trainer_experiment_name
+        json_config["seed_dir"] = output_paths["seed_dir"]
+        json_config["run_name"] = resolved_run_name
+        json_config["ppo_data_dir"] = ppo_data_dir
+        json_config["legacy_results_layout"] = use_legacy_results_layout
         json.dump(json_config, f, indent=2)
     
     # Save metrics (including periodic evaluation results)
@@ -245,7 +284,12 @@ def train_ppo_sp(
 def train_all_layouts(
     seeds: List[int],
     layouts: Optional[List[str]] = None,
-    results_dir: str = "results",
+    results_dir: Optional[str] = None,
+    use_legacy_results_layout: bool = False,
+    ex_name_prefix: Optional[str] = None,
+    timestamp_dir: bool = False,
+    ppo_data_dir: Optional[str] = None,
+    agent_name: str = DEFAULT_AGENT_NAME,
     verbose: bool = True,
     use_wandb: bool = False,
     wandb_project: str = "overcooked-ai",
@@ -287,6 +331,15 @@ def train_all_layouts(
                     layout=layout,
                     seed=seed,
                     results_dir=results_dir,
+                    use_legacy_results_layout=use_legacy_results_layout,
+                    ex_name=(
+                        f"{ex_name_prefix}__layout-{layout}"
+                        if ex_name_prefix
+                        else f"ppo_sp__layout-{layout}"
+                    ),
+                    timestamp_dir=timestamp_dir,
+                    ppo_data_dir=ppo_data_dir,
+                    agent_name=agent_name,
                     verbose=verbose,
                     use_wandb=use_wandb,
                     wandb_project=wandb_project,
@@ -355,8 +408,36 @@ def main():
     parser.add_argument(
         "--results_dir",
         type=str,
-        default="results/ppo_sp",
-        help="Directory to save results"
+        default=None,
+        help="Legacy output directory (ignored unless --use_legacy_results_layout)"
+    )
+    parser.add_argument(
+        "--use_legacy_results_layout",
+        action="store_true",
+        help="Use legacy results_dir/experiment_name layout instead of DATA_DIR/ppo_runs"
+    )
+    parser.add_argument(
+        "--ex_name",
+        type=str,
+        default=None,
+        help="Deprecated-style experiment name (run directory name without timestamp)"
+    )
+    parser.add_argument(
+        "--timestamp_dir",
+        action="store_true",
+        help="Prefix run directory with timestamp"
+    )
+    parser.add_argument(
+        "--ppo_data_dir",
+        type=str,
+        default=None,
+        help="Base PPO run directory (default: DATA_DIR/ppo_runs)"
+    )
+    parser.add_argument(
+        "--agent_name",
+        type=str,
+        default=DEFAULT_AGENT_NAME,
+        help="Agent subdirectory name under each seed directory"
     )
     
     parser.add_argument(
@@ -514,6 +595,11 @@ def main():
             layout=args.layout,
             seed=args.seed,
             results_dir=args.results_dir,
+            use_legacy_results_layout=args.use_legacy_results_layout,
+            ex_name=args.ex_name or f"ppo_sp__layout-{args.layout}",
+            timestamp_dir=args.timestamp_dir,
+            ppo_data_dir=args.ppo_data_dir,
+            agent_name=args.agent_name,
             verbose=verbose,
             use_wandb=args.use_wandb,
             wandb_project=args.wandb_project,
@@ -527,6 +613,11 @@ def main():
             seeds=seeds,
             layouts=PAPER_LAYOUTS,
             results_dir=args.results_dir,
+            use_legacy_results_layout=args.use_legacy_results_layout,
+            ex_name_prefix=args.ex_name,
+            timestamp_dir=args.timestamp_dir,
+            ppo_data_dir=args.ppo_data_dir,
+            agent_name=args.agent_name,
             verbose=verbose,
             use_wandb=args.use_wandb,
             wandb_project=args.wandb_project,

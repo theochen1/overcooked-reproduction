@@ -307,32 +307,38 @@ def match_ppo_with_other_agent(save_dir, other_agent, n=1, display=False):
     agent_eval.evaluate_agent_pair(ap1, display=display, num_games=n)
 
 def plot_ppo_run(name, sparse=False, limit=None, print_config=False, seeds=None, single=False):
-    from collections import defaultdict
     train_infos, config = load_training_data(name, seeds)
-    
+
     if print_config:
         print(config)
-    
+
     if limit is None:
         limit = config["PPO_RUN_TOT_TIMESTEPS"]
-    
-    num_datapoints = len(train_infos[0]['eprewmean'])
-    
+
+    metric_key = "ep_sparse_rew_mean" if sparse else "eprewmean"
+    num_datapoints = min(len(info[metric_key]) for info in train_infos)
     prop_data = limit / config["PPO_RUN_TOT_TIMESTEPS"]
-    ciel_data_idx = int(num_datapoints * prop_data)
+    ciel_data_idx = max(int(num_datapoints * prop_data), 1)
+    xs = config["TOTAL_BATCH_SIZE"] * np.arange(1, ciel_data_idx + 1)
 
     datas = []
     for seed_num, info in enumerate(train_infos):
-        info['xs'] = config["TOTAL_BATCH_SIZE"] * np.array(range(1, ciel_data_idx + 1))
+        y_values = np.asarray(info[metric_key][:ciel_data_idx], dtype=np.float32)
         if single:
-            plt.plot(info['xs'], info["ep_sparse_rew_mean"][:ciel_data_idx], alpha=1, label="Sparse{}".format(seed_num))
-        datas.append(info["ep_sparse_rew_mean"][:ciel_data_idx])
+            label = "seed{}".format(seeds[seed_num]) if seeds is not None else "Seed{}".format(seed_num)
+            plt.plot(xs, y_values, alpha=1, label=label)
+        datas.append(y_values)
+
     if not single:
-        seaborn.tsplot(time=info['xs'], data=datas)
+        stacked = np.vstack(datas)
+        mean = np.mean(stacked, axis=0)
+        sem = np.std(stacked, axis=0) / np.sqrt(stacked.shape[0])
+        plt.plot(xs, mean, alpha=1, label=metric_key)
+        plt.fill_between(xs, mean - sem, mean + sem, alpha=0.25, linewidth=0)
+
     plt.ticklabel_format(style='sci', axis='x', scilimits=(0,0))
-    
-    if single:
-        plt.legend()
+
+    plt.legend()
 
 @ex.automain
 # @profile
