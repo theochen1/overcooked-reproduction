@@ -14,10 +14,10 @@ from .model import BCPolicy
 
 @dataclass
 class BCTrainConfig:
-    num_epochs: int = 1000
-    learning_rate: float = 1e-4
+    num_epochs: int = 100
+    learning_rate: float = 1e-3
     adam_eps: float = 1e-8
-    batch_size: int = 256
+    batch_size: int = 64
 
 
 def create_train_state(rng, input_dim: int, config: BCTrainConfig) -> TrainState:
