@@ -1,5 +1,6 @@
 """Adapters between JAX-lift state and legacy planner state."""
 
+import copy
 from dataclasses import dataclass
 from typing import Callable
 
@@ -166,6 +167,8 @@ class PlanningEvalHarness:
 
         `other_agent` is treated as deterministic during embedded planning.
         """
-        pbc = EmbeddedPlanningAgent(other_agent, self._ae.mlp, self._ae.env, delivery_horizon=delivery_horizon)
-        pair = AgentPair(pbc, other_agent) if pbc_index == 0 else AgentPair(other_agent, pbc)
+        planner_partner = copy.deepcopy(other_agent)
+        rollout_partner = copy.deepcopy(other_agent)
+        pbc = EmbeddedPlanningAgent(planner_partner, self._ae.mlp, self._ae.env, delivery_horizon=delivery_horizon)
+        pair = AgentPair(pbc, rollout_partner) if pbc_index == 0 else AgentPair(rollout_partner, pbc)
         return self._ae.evaluate_agent_pair(pair, num_games=num_games, display=display, info=True)

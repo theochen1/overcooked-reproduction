@@ -61,4 +61,36 @@ def from_legacy_state(terrain: Terrain, legacy_state) -> OvercookedState:
         held_obj=jnp.array(held_obj, dtype=jnp.int32),
         held_soup=jnp.array(held_soup, dtype=jnp.int32),
     )
+
+    # Terrain index maps for fixed-size arrays.
+    pot_index = {
+        tuple(jnp.asarray(terrain.pot_positions[i]).tolist()): i
+        for i, m in enumerate(jnp.asarray(terrain.pot_mask).tolist())
+        if m
+    }
+    counter_index = {
+        tuple(jnp.asarray(terrain.counter_positions[i]).tolist()): i
+        for i, m in enumerate(jnp.asarray(terrain.counter_mask).tolist())
+        if m
+    }
+
+    pot_state = st.pot_state
+    counter_obj = st.counter_obj
+    counter_soup = st.counter_soup
+    for obj in legacy_state.objects.values():
+        pos = tuple(obj.position)
+        if obj.name == "soup":
+            soup_type, n, c = obj.state
+            payload = jnp.array([_soup_type_to_id(soup_type), int(n), int(c)], dtype=jnp.int32)
+            if pos in pot_index:
+                pot_state = pot_state.at[pot_index[pos]].set(payload)
+            elif pos in counter_index:
+                idx = counter_index[pos]
+                counter_obj = counter_obj.at[idx].set(OBJ_SOUP)
+                counter_soup = counter_soup.at[idx].set(payload)
+        elif pos in counter_index:
+            idx = counter_index[pos]
+            counter_obj = counter_obj.at[idx].set(_obj_name_to_id(obj.name))
+
+    st = st.replace(pot_state=pot_state, counter_obj=counter_obj, counter_soup=counter_soup)
     return st

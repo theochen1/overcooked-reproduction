@@ -2,7 +2,7 @@
 
 import jax.numpy as jnp
 
-from human_aware_rl_jax_lift.env.state import OBJ_DISH, OBJ_ONION, OBJ_SOUP, OvercookedState, Terrain, pos_to_yx
+from human_aware_rl_jax_lift.env.state import OBJ_DISH, OBJ_ONION, OBJ_SOUP, OvercookedState, Terrain
 
 
 def _make_layer(shape, positions: jnp.ndarray, values: jnp.ndarray) -> jnp.ndarray:
@@ -15,6 +15,22 @@ def _make_layer(shape, positions: jnp.ndarray, values: jnp.ndarray) -> jnp.ndarr
 def _player_orientation_layer(shape, pos: jnp.ndarray, orientation_idx: jnp.ndarray, target_idx: int) -> jnp.ndarray:
     v = jnp.where(orientation_idx == target_idx, 1, 0)
     return _make_layer(shape, pos[None, :], jnp.array([v], dtype=jnp.int32))
+
+
+def _object_layer_from_sources(
+    shape,
+    counter_positions: jnp.ndarray,
+    counter_mask: jnp.ndarray,
+    counter_obj: jnp.ndarray,
+    obj_id: int,
+    player_pos: jnp.ndarray,
+    held_obj: jnp.ndarray,
+):
+    counter_vals = (counter_mask & (counter_obj == obj_id)).astype(jnp.int32)
+    counter_layer = _make_layer(shape, counter_positions, counter_vals)
+    player_vals = (held_obj == obj_id).astype(jnp.int32)
+    player_layer = _make_layer(shape, player_pos, player_vals)
+    return counter_layer + player_layer
 
 
 def lossless_state_encoding_20(terrain: Terrain, state: OvercookedState):
@@ -57,45 +73,38 @@ def lossless_state_encoding_20(terrain: Terrain, state: OvercookedState):
         layers.append(_make_layer(shape, terrain.pot_positions, cook_time))
 
         # 18 onion_soup_loc (soups not in pots)
-        soup_positions = []
-        soup_values = []
-        for i in range(2):
-            if state.held_obj[i] == OBJ_SOUP:
-                soup_positions.append(state.player_pos[i])
-                soup_values.append(jnp.array(1, dtype=jnp.int32))
-        ctr_soup_mask = (state.counter_obj == OBJ_SOUP) & terrain.counter_mask
-        ctr_soup_pos = terrain.counter_positions[ctr_soup_mask]
-        if ctr_soup_pos.size > 0:
-            for p in ctr_soup_pos:
-                soup_positions.append(p)
-                soup_values.append(jnp.array(1, dtype=jnp.int32))
-        if soup_positions:
-            layers.append(_make_layer(shape, jnp.stack(soup_positions), jnp.stack(soup_values)))
-        else:
-            layers.append(jnp.zeros(shape, dtype=jnp.int32))
+        soup_layer = _object_layer_from_sources(
+            shape=shape,
+            counter_positions=terrain.counter_positions,
+            counter_mask=terrain.counter_mask,
+            counter_obj=state.counter_obj,
+            obj_id=OBJ_SOUP,
+            player_pos=state.player_pos,
+            held_obj=state.held_obj,
+        )
+        layers.append(soup_layer)
 
         # 19 dishes, 20 onions
-        dish_positions = []
-        dish_values = []
-        onion_positions = []
-        onion_values = []
-        ctr_dish_mask = (state.counter_obj == OBJ_DISH) & terrain.counter_mask
-        ctr_onion_mask = (state.counter_obj == OBJ_ONION) & terrain.counter_mask
-        if jnp.any(ctr_dish_mask):
-            for p in terrain.counter_positions[ctr_dish_mask]:
-                dish_positions.append(p)
-                dish_values.append(jnp.array(1, dtype=jnp.int32))
-        if jnp.any(ctr_onion_mask):
-            for p in terrain.counter_positions[ctr_onion_mask]:
-                onion_positions.append(p)
-                onion_values.append(jnp.array(1, dtype=jnp.int32))
-        for i in range(2):
-            if state.held_obj[i] == OBJ_DISH:
-                dish_positions.append(state.player_pos[i]); dish_values.append(jnp.array(1, dtype=jnp.int32))
-            elif state.held_obj[i] == OBJ_ONION:
-                onion_positions.append(state.player_pos[i]); onion_values.append(jnp.array(1, dtype=jnp.int32))
-        layers.append(_make_layer(shape, jnp.stack(dish_positions), jnp.stack(dish_values)) if dish_positions else jnp.zeros(shape, dtype=jnp.int32))
-        layers.append(_make_layer(shape, jnp.stack(onion_positions), jnp.stack(onion_values)) if onion_positions else jnp.zeros(shape, dtype=jnp.int32))
+        dish_layer = _object_layer_from_sources(
+            shape=shape,
+            counter_positions=terrain.counter_positions,
+            counter_mask=terrain.counter_mask,
+            counter_obj=state.counter_obj,
+            obj_id=OBJ_DISH,
+            player_pos=state.player_pos,
+            held_obj=state.held_obj,
+        )
+        onion_layer = _object_layer_from_sources(
+            shape=shape,
+            counter_positions=terrain.counter_positions,
+            counter_mask=terrain.counter_mask,
+            counter_obj=state.counter_obj,
+            obj_id=OBJ_ONION,
+            player_pos=state.player_pos,
+            held_obj=state.held_obj,
+        )
+        layers.append(dish_layer)
+        layers.append(onion_layer)
 
         stacked = jnp.stack(layers, axis=0)
         return jnp.transpose(stacked, (1, 2, 0))

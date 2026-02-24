@@ -21,6 +21,8 @@ environment:
     - random3
 
 network:
+  activation: leaky_relu
+  negative_slope: 0.2
   conv_filters: 25
   conv_layers:
     - {kernel: [5, 5], padding: SAME}
