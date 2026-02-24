@@ -273,6 +273,7 @@ def train_all_layouts(
     verbose: bool = True,
     use_wandb: bool = False,
     wandb_project: str = "overcooked-ai",
+    canonical_paper_entrypoint: bool = True,
 ) -> Dict[str, Dict[int, Dict[str, Any]]]:
     """
     Train PPO self-play agents for all layouts with multiple seeds.
@@ -323,6 +324,7 @@ def train_all_layouts(
                     verbose=verbose,
                     use_wandb=use_wandb,
                     wandb_project=wandb_project,
+                    canonical_paper_entrypoint=canonical_paper_entrypoint,
                 )
                 all_results[layout][seed] = results
                 
@@ -438,6 +440,19 @@ def main():
         action="store_true",
         help="Reduce output verbosity"
     )
+    parser.add_argument(
+        "--paper",
+        dest="paper",
+        action="store_true",
+        default=True,
+        help="Enable strict canonical paper mode"
+    )
+    parser.add_argument(
+        "--not_paper",
+        dest="paper",
+        action="store_false",
+        help="Disable canonical paper mode (ablation/experimental runs)"
+    )
     
     parser.add_argument(
         "--local",
@@ -519,6 +534,31 @@ def main():
     )
     
     args = parser.parse_args()
+    ablation_requested = any([
+        args.local,
+        args.fast,
+        args.timesteps is not None,
+        args.num_training_iters is not None,
+        args.use_early_stopping,
+        args.vf_coef is not None,
+        args.max_grad_norm is not None,
+        args.verbose_debug,
+        args.grad_diagnostics,
+        args.cliprange_schedule is not None,
+        args.clip_eps is not None,
+        args.clip_eps_end is not None,
+        args.clip_end_fraction is not None,
+    ])
+    if args.paper and ablation_requested:
+        parser.error(
+            "--paper mode cannot be combined with ablation flags "
+            "(e.g., --fast/--local/--timesteps/optimizer overrides). Use --not_paper."
+        )
+    canonical_paper_entrypoint = args.paper and not ablation_requested
+
+    def _ablation_name(name: str) -> str:
+        return name if name.startswith("ablation__") else f"ablation__{name}"
+
     
     verbose = not args.quiet
     
@@ -571,36 +611,44 @@ def main():
     
     if args.layout:
         # Train single layout
+        run_name = args.ex_name or get_default_run_name("ppo_sp", layout=args.layout)
+        if not canonical_paper_entrypoint:
+            run_name = _ablation_name(run_name)
         results = train_ppo_sp(
             layout=args.layout,
             seed=args.seed,
             results_dir=args.results_dir,
             use_legacy_results_layout=args.use_legacy_results_layout,
-            ex_name=args.ex_name or get_default_run_name("ppo_sp", layout=args.layout),
+            ex_name=run_name,
             timestamp_dir=args.timestamp_dir,
             ppo_data_dir=args.ppo_data_dir,
             agent_name=args.agent_name,
             verbose=verbose,
             use_wandb=args.use_wandb,
             wandb_project=args.wandb_project,
+            canonical_paper_entrypoint=canonical_paper_entrypoint,
             **local_overrides
         )
         print(f"\nTraining complete. Results: {results}")
         
     elif args.all_layouts:
         # Train all layouts
+        ex_name_prefix = args.ex_name
+        if not canonical_paper_entrypoint:
+            ex_name_prefix = _ablation_name(ex_name_prefix) if ex_name_prefix else "ablation__ppo_sp"
         results = train_all_layouts(
             seeds=seeds,
             layouts=PAPER_LAYOUTS,
             results_dir=args.results_dir,
             use_legacy_results_layout=args.use_legacy_results_layout,
-            ex_name_prefix=args.ex_name,
+            ex_name_prefix=ex_name_prefix,
             timestamp_dir=args.timestamp_dir,
             ppo_data_dir=args.ppo_data_dir,
             agent_name=args.agent_name,
             verbose=verbose,
             use_wandb=args.use_wandb,
             wandb_project=args.wandb_project,
+            canonical_paper_entrypoint=canonical_paper_entrypoint,
         )
         print_summary(results)
         

@@ -56,6 +56,23 @@ def _has_checkpoint_under_agent_dir(agent_dir: str) -> bool:
     return any(name.startswith("checkpoint") for name in os.listdir(agent_dir))
 
 
+def _canonical_agent_dir(
+    *,
+    model_type: str,
+    layout: str,
+    seed: int,
+    ppo_data_dir: str,
+    run_name_templates: Dict[str, str],
+    agent_dirs: Dict[str, str],
+) -> Optional[str]:
+    run_template = run_name_templates.get(model_type)
+    agent_name = agent_dirs.get(model_type)
+    if not run_template or not agent_name or not ppo_data_dir:
+        return None
+    run_name = format_run_template(run_template, layout)
+    return os.path.join(ppo_data_dir, run_name, f"seed{seed}", agent_name)
+
+
 def _has_checkpoint_for_layout(
     *,
     model_type: str,
@@ -67,12 +84,16 @@ def _has_checkpoint_for_layout(
     paper_strict: bool = True,
 ) -> bool:
     # Canonical ppo_runs path first
-    run_template = run_name_templates.get(model_type)
-    agent_name = agent_dirs.get(model_type)
     ppo_data_dir = dirs.get("ppo_data_dir")
-    if run_template and agent_name and ppo_data_dir:
-        run_name = format_run_template(run_template, layout)
-        agent_dir = os.path.join(ppo_data_dir, run_name, f"seed{seed}", agent_name)
+    agent_dir = _canonical_agent_dir(
+        model_type=model_type,
+        layout=layout,
+        seed=seed,
+        ppo_data_dir=ppo_data_dir,
+        run_name_templates=run_name_templates,
+        agent_dirs=agent_dirs,
+    )
+    if agent_dir:
         if _has_checkpoint_under_agent_dir(agent_dir):
             return True
 
@@ -91,6 +112,175 @@ def _has_checkpoint_for_layout(
                 if checkpoints:
                     return True
     return False
+
+
+def _missing_layout_seed_pairs(
+    *,
+    model_type: str,
+    layouts: List[str],
+    seeds: List[int],
+    dirs: Dict[str, str],
+    run_name_templates: Dict[str, str],
+    agent_dirs: Dict[str, str],
+) -> Dict[str, List[int]]:
+    """Return missing canonical checkpoint pairs by layout."""
+    missing: Dict[str, List[int]] = {}
+    ppo_data_dir = dirs.get("ppo_data_dir")
+    for layout in layouts:
+        missing_seeds: List[int] = []
+        for seed in seeds:
+            agent_dir = _canonical_agent_dir(
+                model_type=model_type,
+                layout=layout,
+                seed=seed,
+                ppo_data_dir=ppo_data_dir,
+                run_name_templates=run_name_templates,
+                agent_dirs=agent_dirs,
+            )
+            if not agent_dir or not _has_checkpoint_under_agent_dir(agent_dir):
+                missing_seeds.append(seed)
+        if missing_seeds:
+            missing[layout] = missing_seeds
+    return missing
+
+
+def train_missing_models(
+    *,
+    layouts: List[str],
+    seeds: List[int],
+    dirs: Dict[str, str],
+    run_name_templates: Dict[str, str],
+    agent_dirs: Dict[str, str],
+    paper_strict: bool = True,
+    verbose: bool = True,
+) -> None:
+    """
+    Train missing canonical artifacts for Figure-4 reproduction.
+
+    Trains BC/HP and PPO_SP/PPO_BC/PPO_HP as needed.
+    """
+    if not paper_strict:
+        raise ValueError("--train_missing requires --paper_strict for deterministic behavior.")
+
+    missing_bc = [
+        layout for layout in layouts
+        if not os.path.exists(os.path.join(dirs["bc"], layout))
+    ]
+    missing_hp = [
+        layout for layout in layouts
+        if not os.path.exists(os.path.join(dirs["hp"], layout))
+    ]
+    missing_sp = _missing_layout_seed_pairs(
+        model_type="ppo_sp",
+        layouts=layouts,
+        seeds=seeds,
+        dirs=dirs,
+        run_name_templates=run_name_templates,
+        agent_dirs=agent_dirs,
+    )
+    missing_bc_ppo = _missing_layout_seed_pairs(
+        model_type="ppo_bc",
+        layouts=layouts,
+        seeds=seeds,
+        dirs=dirs,
+        run_name_templates=run_name_templates,
+        agent_dirs=agent_dirs,
+    )
+    missing_hp_ppo = _missing_layout_seed_pairs(
+        model_type="ppo_hp",
+        layouts=layouts,
+        seeds=seeds,
+        dirs=dirs,
+        run_name_templates=run_name_templates,
+        agent_dirs=agent_dirs,
+    )
+
+    if not any([missing_bc, missing_hp, missing_sp, missing_bc_ppo, missing_hp_ppo]):
+        if verbose:
+            print("No missing canonical BC/HP/PPO artifacts detected.")
+        return
+
+    if verbose:
+        print("\n" + "=" * 70)
+        print("TRAIN MISSING MODELS")
+        print("=" * 70)
+
+    if missing_bc:
+        if verbose:
+            print(f"Training missing BC models for layouts: {missing_bc}")
+        from human_aware_rl.imitation.train_bc_models import train_all_layouts as train_bc_layouts
+
+        train_bc_layouts(
+            data_split="train",
+            layouts=missing_bc,
+            verbose=verbose,
+            evaluate=False,
+        )
+
+    if missing_hp:
+        if verbose:
+            print(f"Training missing Human Proxy models for layouts: {missing_hp}")
+        from human_aware_rl.imitation.train_bc_models import train_all_layouts as train_bc_layouts
+
+        train_bc_layouts(
+            data_split="test",
+            layouts=missing_hp,
+            verbose=verbose,
+            evaluate=False,
+        )
+
+    def _train_missing_ppo(
+        model_type: str,
+        missing: Dict[str, List[int]],
+    ) -> None:
+        if not missing:
+            return
+        layouts_to_train = sorted(missing.keys())
+        seeds_to_train: List[int] = sorted({seed for seed_list in missing.values() for seed in seed_list})
+        if verbose:
+            print(f"Training missing {model_type.upper()} models for layouts={layouts_to_train}, seeds={seeds_to_train}")
+            if any(set(seed_list) != set(seeds_to_train) for seed_list in missing.values()):
+                print(
+                    f"  Note: {model_type} has partial layout/seed gaps; training uses "
+                    "layout × union(seeds) to fill missing checkpoints."
+                )
+        if model_type == "ppo_sp":
+            from human_aware_rl.ppo.train_ppo_sp import train_all_layouts as train_ppo_layouts
+            train_ppo_layouts(
+                seeds=seeds_to_train,
+                layouts=layouts_to_train,
+                ppo_data_dir=dirs["ppo_data_dir"],
+                agent_name=agent_dirs["ppo_sp"],
+                verbose=verbose,
+                canonical_paper_entrypoint=True,
+            )
+        elif model_type == "ppo_bc":
+            from human_aware_rl.ppo.train_ppo_bc import train_all_layouts as train_ppo_layouts
+            train_ppo_layouts(
+                seeds=seeds_to_train,
+                layouts=layouts_to_train,
+                ppo_data_dir=dirs["ppo_data_dir"],
+                partner_type="bc_train",
+                agent_name=agent_dirs["ppo_bc"],
+                verbose=verbose,
+                canonical_paper_entrypoint=True,
+            )
+        elif model_type == "ppo_hp":
+            from human_aware_rl.ppo.train_ppo_hp import train_all_layouts as train_ppo_layouts
+            train_ppo_layouts(
+                seeds=seeds_to_train,
+                layouts=layouts_to_train,
+                ppo_data_dir=dirs["ppo_data_dir"],
+                agent_name=agent_dirs["ppo_hp"],
+                verbose=verbose,
+                canonical_paper_entrypoint=True,
+            )
+        else:
+            raise ValueError(f"Unsupported model_type for train_missing: {model_type}")
+
+    _train_missing_ppo("ppo_sp", missing_sp)
+    _train_missing_ppo("ppo_bc", missing_bc_ppo)
+    _train_missing_ppo("ppo_hp", missing_hp_ppo)
 
 
 def check_model_availability(
@@ -373,6 +563,11 @@ def main():
         action="store_true",
         help="Only check model availability, don't run evaluation"
     )
+    parser.add_argument(
+        "--train_missing",
+        action="store_true",
+        help="Train missing BC/HP/PPO artifacts before strict evaluation"
+    )
     
     parser.add_argument(
         "--plot_only",
@@ -457,11 +652,11 @@ def main():
     parser.add_argument("--run_name_sp", type=str, default=DEFAULT_RUN_NAME_TEMPLATES["ppo_sp"])
     parser.add_argument("--run_name_bc", type=str, default=DEFAULT_RUN_NAME_TEMPLATES["ppo_bc"])
     parser.add_argument("--run_name_hp", type=str, default=DEFAULT_RUN_NAME_TEMPLATES["ppo_hp"])
-    parser.add_argument("--run_name_pbt", type=str, default="pbt_{layout}")
+    parser.add_argument("--run_name_pbt", type=str, default=DEFAULT_RUN_NAME_TEMPLATES["pbt"])
     parser.add_argument("--agent_dir_sp", type=str, default=DEFAULT_AGENT_DIRS["ppo_sp"])
     parser.add_argument("--agent_dir_bc", type=str, default=DEFAULT_AGENT_DIRS["ppo_bc"])
     parser.add_argument("--agent_dir_hp", type=str, default=DEFAULT_AGENT_DIRS["ppo_hp"])
-    parser.add_argument("--agent_dir_pbt", type=str, default="pbt_agent")
+    parser.add_argument("--agent_dir_pbt", type=str, default=DEFAULT_AGENT_DIRS["pbt"])
     
     parser.add_argument(
         "--quiet",
@@ -496,6 +691,26 @@ def main():
         "ppo_hp": args.agent_dir_hp,
         "pbt": args.agent_dir_pbt,
     }
+    if args.paper_strict:
+        strict_errors: List[str] = []
+        if run_name_templates["ppo_sp"] != DEFAULT_RUN_NAME_TEMPLATES["ppo_sp"]:
+            strict_errors.append("run_name_sp must match canonical default in --paper_strict mode")
+        if run_name_templates["ppo_bc"] != DEFAULT_RUN_NAME_TEMPLATES["ppo_bc"]:
+            strict_errors.append("run_name_bc must match canonical default in --paper_strict mode")
+        if run_name_templates["ppo_hp"] != DEFAULT_RUN_NAME_TEMPLATES["ppo_hp"]:
+            strict_errors.append("run_name_hp must match canonical default in --paper_strict mode")
+        if run_name_templates["pbt"] != DEFAULT_RUN_NAME_TEMPLATES["pbt"]:
+            strict_errors.append("run_name_pbt must match canonical default in --paper_strict mode")
+        if agent_dirs["ppo_sp"] != DEFAULT_AGENT_DIRS["ppo_sp"]:
+            strict_errors.append("agent_dir_sp must match canonical default in --paper_strict mode")
+        if agent_dirs["ppo_bc"] != DEFAULT_AGENT_DIRS["ppo_bc"]:
+            strict_errors.append("agent_dir_bc must match canonical default in --paper_strict mode")
+        if agent_dirs["ppo_hp"] != DEFAULT_AGENT_DIRS["ppo_hp"]:
+            strict_errors.append("agent_dir_hp must match canonical default in --paper_strict mode")
+        if agent_dirs["pbt"] != DEFAULT_AGENT_DIRS["pbt"]:
+            strict_errors.append("agent_dir_pbt must match canonical default in --paper_strict mode")
+        if strict_errors:
+            parser.error("; ".join(strict_errors))
     
     # Check model availability
     availability = check_model_availability(
@@ -508,6 +723,26 @@ def main():
         verbose=verbose,
     )
     
+    if args.train_missing:
+        train_missing_models(
+            layouts=layouts or PAPER_LAYOUTS,
+            seeds=seeds,
+            dirs=dirs,
+            run_name_templates=run_name_templates,
+            agent_dirs=agent_dirs,
+            paper_strict=args.paper_strict,
+            verbose=verbose,
+        )
+        availability = check_model_availability(
+            layouts=layouts or PAPER_LAYOUTS,
+            seeds=seeds,
+            dirs=dirs,
+            run_name_templates=run_name_templates,
+            agent_dirs=agent_dirs,
+            paper_strict=args.paper_strict,
+            verbose=verbose,
+        )
+
     if args.check_only:
         return
     

@@ -6,8 +6,6 @@ agents in the Overcooked environment. It supports self-play and
 BC-schedule training modes.
 """
 
-from __future__ import annotations  # Defer type hint evaluation
-
 import os
 import pickle
 import json
@@ -162,11 +160,14 @@ def assert_paper_parity(config: PPOConfig) -> None:
         ("old_dynamics", config.old_dynamics, expected["old_dynamics"]),
         ("clip_eps", config.clip_eps, expected["clip_eps"]),
         ("gae_lambda", config.gae_lambda, expected["gae_lambda"]),
+        ("vf_coef", config.vf_coef, expected["vf_coef"]),
+        ("max_grad_norm", config.max_grad_norm, expected["max_grad_norm"]),
         ("ent_coef", config.ent_coef, expected["entropy_coeff_start"]),
         ("entropy_coeff_start", config.entropy_coeff_start, expected["entropy_coeff_start"]),
         ("entropy_coeff_end", config.entropy_coeff_end, expected["entropy_coeff_end"]),
         ("use_entropy_annealing", config.use_entropy_annealing, expected["use_entropy_annealing"]),
         ("num_minibatches", config.num_minibatches, expected["num_minibatches"]),
+        ("num_epochs", config.num_epochs, expected["num_sgd_iter"]),
         ("horizon", config.horizon, expected["horizon"]),
         ("num_envs", config.num_envs, expected["num_workers"]),
         ("reward_shaping_horizon", config.reward_shaping_horizon, expected["reward_shaping_horizon"]),

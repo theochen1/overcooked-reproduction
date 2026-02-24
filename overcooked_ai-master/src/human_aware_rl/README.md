@@ -1,3 +1,25 @@
+# Human-Aware RL Reproduction Module
+
+> **Source-of-truth for paper reproduction lives here.**
+>
+> For faithful Figure 4-7 reproduction runs, use:
+>
+> ```bash
+> python -m human_aware_rl.evaluation.run_paper_evaluation \
+>   --all \
+>   --paper_strict \
+>   --train_missing \
+>   --results_file paper_results.json \
+>   --output_dir figures
+> ```
+>
+> This command:
+> - trains missing BC/HP and PPO_SP/PPO_BC/PPO_HP artifacts under canonical `DATA_DIR/ppo_runs`
+> - evaluates using strict canonical checkpoint resolution only (no legacy `results/*` scans)
+> - writes paper-style outputs and plots
+>
+> Legacy TensorFlow/MPI workflows are historical references only; use the JAX/PyTorch paths in this module for reproducible paper reruns.
+
 # Human-Aware Reinforcement Learning
 
 This code is based on the work in [On the Utility of Learning about Humans for Human-AI Coordination](https://arxiv.org/abs/1910.05789). 

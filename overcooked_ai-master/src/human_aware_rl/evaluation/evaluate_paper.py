@@ -273,6 +273,18 @@ def find_checkpoint_from_run(
     return os.path.join(agent_dir, sorted(checkpoints)[-1])
 
 
+def expected_agent_dir_from_run(
+    ppo_data_dir: str,
+    run_name_template: str,
+    layout: str,
+    seed: int,
+    agent_name: str,
+) -> str:
+    """Return canonical run-registry agent directory for a layout/seed."""
+    run_name = format_run_template(run_name_template, layout)
+    return os.path.join(ppo_data_dir, run_name, f"seed{seed}", agent_name)
+
+
 def resolve_bc_root(source_split: Optional[str], bc_dir: str, hp_dir: str) -> str:
     """Resolve BC-model root from split metadata."""
     if source_split == "train":
@@ -360,13 +372,24 @@ def evaluate_paper_config(
         if source == "pbt":
             run_template = run_template or "pbt_{layout}"
             run_agent_name = run_agent_name or "pbt_agent"
+        registry_sources = {"ppo_sp", "ppo_bc", "ppo_hp", "pbt"}
         checkpoint = None
         if strict and seed is None:
             raise ValueError(
                 "Strict paper evaluation requires an explicit seed so checkpoint "
                 "resolution is deterministic."
             )
-        if prefer_run_registry and run_template and run_agent_name and seed is not None:
+        if strict and source in registry_sources:
+            if not prefer_run_registry:
+                raise ValueError(
+                    "Strict paper evaluation requires run-registry loading; "
+                    f"got prefer_run_registry=False for source={source}."
+                )
+            if not run_template or not run_agent_name:
+                raise ValueError(
+                    "Strict paper evaluation requires run template and agent directory "
+                    f"for source={source}."
+                )
             checkpoint = find_checkpoint_from_run(
                 ppo_data_dir=ppo_data_dir,
                 run_name_template=run_template,
@@ -374,12 +397,26 @@ def evaluate_paper_config(
                 seed=seed,
                 agent_name=run_agent_name,
             )
-            if strict and checkpoint is None and source in {"ppo_sp", "ppo_bc", "ppo_hp", "pbt"}:
-                run_name = format_run_template(run_template, layout)
+            if checkpoint is None:
+                expected_agent_dir = expected_agent_dir_from_run(
+                    ppo_data_dir=ppo_data_dir,
+                    run_name_template=run_template,
+                    layout=layout,
+                    seed=seed,
+                    agent_name=run_agent_name,
+                )
                 raise FileNotFoundError(
                     "Strict paper evaluation could not resolve checkpoint from run registry "
-                    f"for source={source}, run={run_name}, seed={seed}, agent={run_agent_name}"
+                    f"for source={source}. Expected checkpoint under: {expected_agent_dir}"
                 )
+        elif prefer_run_registry and run_template and run_agent_name and seed is not None:
+            checkpoint = find_checkpoint_from_run(
+                ppo_data_dir=ppo_data_dir,
+                run_name_template=run_template,
+                layout=layout,
+                seed=seed,
+                agent_name=run_agent_name,
+            )
 
         def _fallback_checkpoint(base_dir: str) -> Optional[str]:
             if strict:
@@ -1043,6 +1080,18 @@ def main():
         help="Agent subdirectory name for PPO_HP runs"
     )
     parser.add_argument(
+        "--run_name_pbt",
+        type=str,
+        default="pbt_{layout}",
+        help="Run-name template for PBT (supports {layout})"
+    )
+    parser.add_argument(
+        "--agent_dir_pbt",
+        type=str,
+        default="pbt_agent",
+        help="Agent subdirectory name for PBT runs"
+    )
+    parser.add_argument(
         "--disable_run_registry",
         action="store_true",
         help="Disable deterministic run_name/seed loading and use legacy directory scans first"
@@ -1112,13 +1161,17 @@ def main():
         "ppo_sp": args.run_name_sp,
         "ppo_bc": args.run_name_bc,
         "ppo_hp": args.run_name_hp,
+        "pbt": args.run_name_pbt,
     }
     agent_dirs = {
         "ppo_sp": args.agent_dir_sp,
         "ppo_bc": args.agent_dir_bc,
         "ppo_hp": args.agent_dir_hp,
+        "pbt": args.agent_dir_pbt,
     }
     prefer_run_registry = not args.disable_run_registry
+    if args.paper_strict and not prefer_run_registry:
+        parser.error("--paper_strict requires run-registry loading; remove --disable_run_registry.")
     
     if args.figure == "all":
         results = evaluate_all_paper_experiments(

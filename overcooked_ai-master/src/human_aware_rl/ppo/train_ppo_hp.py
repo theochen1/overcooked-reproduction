@@ -287,6 +287,7 @@ def train_all_layouts(
     use_wandb: bool = False,
     wandb_project: str = "overcooked-ai",
     hp_model_base_dir: Optional[str] = None,
+    canonical_paper_entrypoint: bool = True,
 ) -> Dict[str, Dict[int, Dict[str, Any]]]:
     """
     Train PPO_HP agents for all layouts with multiple seeds.
@@ -346,6 +347,7 @@ def train_all_layouts(
                     verbose=verbose,
                     use_wandb=use_wandb,
                     wandb_project=wandb_project,
+                    canonical_paper_entrypoint=canonical_paper_entrypoint,
                 )
                 all_results[layout][seed] = results
                 
@@ -479,6 +481,19 @@ def main():
         action="store_true",
         help="Reduce output verbosity"
     )
+    parser.add_argument(
+        "--paper",
+        dest="paper",
+        action="store_true",
+        default=True,
+        help="Enable strict canonical paper mode"
+    )
+    parser.add_argument(
+        "--not_paper",
+        dest="paper",
+        action="store_false",
+        help="Disable canonical paper mode (ablation/experimental runs)"
+    )
     
     parser.add_argument(
         "--local",
@@ -500,6 +515,21 @@ def main():
     )
     
     args = parser.parse_args()
+    ablation_requested = any([
+        args.local,
+        args.fast,
+        args.timesteps is not None,
+    ])
+    if args.paper and ablation_requested:
+        parser.error(
+            "--paper mode cannot be combined with ablation flags "
+            "(e.g., --fast/--local/--timesteps). Use --not_paper."
+        )
+    canonical_paper_entrypoint = args.paper and not ablation_requested
+
+    def _ablation_name(name: str) -> str:
+        return name if name.startswith("ablation__") else f"ablation__{name}"
+
     
     verbose = not args.quiet
     
@@ -531,6 +561,9 @@ def main():
         hp_model_dir = args.hp_model_dir
         if hp_model_dir is None:
             hp_model_dir = DEFAULT_HP_MODEL_PATHS.get(args.layout)
+        run_name = args.ex_name or get_default_run_name("ppo_hp", layout=args.layout)
+        if not canonical_paper_entrypoint:
+            run_name = _ablation_name(run_name)
         
         results = train_ppo_hp(
             layout=args.layout,
@@ -538,25 +571,29 @@ def main():
             hp_model_dir=hp_model_dir,
             results_dir=args.results_dir,
             use_legacy_results_layout=args.use_legacy_results_layout,
-            ex_name=args.ex_name or get_default_run_name("ppo_hp", layout=args.layout),
+            ex_name=run_name,
             timestamp_dir=args.timestamp_dir,
             ppo_data_dir=args.ppo_data_dir,
             agent_name=args.agent_name,
             verbose=verbose,
             use_wandb=args.use_wandb,
             wandb_project=args.wandb_project,
+            canonical_paper_entrypoint=canonical_paper_entrypoint,
             **local_overrides
         )
         print(f"\nTraining complete. Results: {results}")
         
     elif args.all_layouts:
         # Train all layouts
+        ex_name_prefix = args.ex_name
+        if not canonical_paper_entrypoint:
+            ex_name_prefix = _ablation_name(ex_name_prefix) if ex_name_prefix else "ablation__ppo_hp"
         results = train_all_layouts(
             seeds=seeds,
             layouts=PAPER_LAYOUTS,
             results_dir=args.results_dir,
             use_legacy_results_layout=args.use_legacy_results_layout,
-            ex_name_prefix=args.ex_name,
+            ex_name_prefix=ex_name_prefix,
             timestamp_dir=args.timestamp_dir,
             ppo_data_dir=args.ppo_data_dir,
             agent_name=args.agent_name,
@@ -564,6 +601,7 @@ def main():
             use_wandb=args.use_wandb,
             wandb_project=args.wandb_project,
             hp_model_base_dir=args.hp_model_base_dir,
+            canonical_paper_entrypoint=canonical_paper_entrypoint,
         )
         print_summary(results)
         
