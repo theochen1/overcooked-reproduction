@@ -9,10 +9,16 @@ Layout name mapping (DataFrame → engine/.layout file):
   random0            → random0
   random3            → random3
 
+NOTE on trajectory structure from df_traj_to_python_joint_traj:
+  ep_observations is stored as np.array([list_of_states]) — a 1-element numpy
+  array whose single element is the flat list/array of OvercookedState objects.
+  ep_actions is a plain Python list: [list_of_joint_actions].
+  Both are already in the "outer wrapper = episodes" format, so we iterate them
+  directly as episodes (no isinstance wrapping needed).
+
 NOTE on get_overcooked_traj_for_worker_layout:
-  This function internally calls PYTHON_LAYOUT_NAME_TO_JS_NAME[layout_name] to
-  translate engine names (e.g. 'simple') → DataFrame names (e.g. 'cramped_room').
-  So it MUST be called with the engine/JAX name, not the DataFrame name.
+  Internally calls PYTHON_LAYOUT_NAME_TO_JS_NAME[layout_name], so MUST be given
+  the engine/JAX name (e.g. 'simple'), NOT the DataFrame name ('cramped_room').
 
 Pipeline per timestep (both players):
   DataFrame row
@@ -23,13 +29,6 @@ Pipeline per timestep (both players):
 
 Usage (from repo root):
   python human_aware_rl_jax_lift/scripts/prepare_bc_data.py
-
-  # or with explicit paths / subset of layouts:
-  python human_aware_rl_jax_lift/scripts/prepare_bc_data.py \\
-    --train_pkl human_aware_rl/human_aware_rl/data/human/anonymized/clean_train_trials.pkl \\
-    --test_pkl  human_aware_rl/human_aware_rl/data/human/anonymized/clean_test_trials.pkl \\
-    --out_dir   human_aware_rl_jax_lift/data/bc_data \\
-    --layouts   simple unident_s random0 random1 random3
 """
 
 import argparse
@@ -83,41 +82,50 @@ def _featurize_worker(worker_id, df, jax_layout: str, terrain) -> tuple[list, li
     """
     Featurize all timesteps for one worker on one layout.
 
-    `jax_layout` is the engine/JAX name (e.g. 'simple'). It is passed directly
-    to get_overcooked_traj_for_worker_layout which does PYTHON_LAYOUT_NAME_TO_JS_NAME
-    internally to translate to the DataFrame name ('cramped_room').
+    `jax_layout` is the engine/JAX name (e.g. 'simple').  It is passed directly
+    to get_overcooked_traj_for_worker_layout which uses PYTHON_LAYOUT_NAME_TO_JS_NAME
+    internally to translate to the DataFrame name.
 
-    Returns (features_list, actions_list) where each feature is float32[64]
-    and each action is an int. Entries for both players are interleaved.
+    Returns (features_list, actions_list): each feature is float32[64], each
+    action is an int.  Entries for both players are interleaved: p0 then p1 per
+    timestep.
     """
     from human_aware_rl.human.process_dataframes import get_overcooked_traj_for_worker_layout
     from human_aware_rl_jax_lift.env.compat import from_legacy_state
     from human_aware_rl_jax_lift.encoding.bc_features import featurize_state_64
 
-    # Pass jax_layout (engine name) — the function maps it to the DataFrame name internally.
     traj, _ = get_overcooked_traj_for_worker_layout(df, worker_id, jax_layout)
     if traj is None:
         return [], []
 
-    ep_obs  = traj["ep_observations"]
-    ep_acts = traj["ep_actions"]
+    # df_traj_to_python_joint_traj always stores:
+    #   ep_observations = np.array([list_of_OvercookedState])  shape (1,), dtype object
+    #   ep_actions      = [list_of_joint_action_tuples]        plain Python list
+    #
+    # Both are already in the "outer = episodes" wrapper format.  Iterate them
+    # directly — ep[0] is the single episode's state/action sequence.
+    ep_obs  = traj["ep_observations"]   # np.array of shape (n_episodes,)
+    ep_acts = traj["ep_actions"]        # list of length n_episodes
 
-    # Normalise: some versions wrap in an extra list (multi-episode), some don't.
-    if isinstance(ep_obs[0], list):
-        obs_episodes  = ep_obs
-        acts_episodes = ep_acts
-    else:
-        obs_episodes  = [ep_obs]
-        acts_episodes = [ep_acts]
+    features: list[np.ndarray] = []
+    actions:  list[int]        = []
 
-    features, actions = [], []
-    for obs_ep, acts_ep in zip(obs_episodes, acts_episodes):
+    for obs_ep, acts_ep in zip(ep_obs, ep_acts):
+        # obs_ep  : iterable of OvercookedState objects for one episode
+        # acts_ep : list of joint-action tuples for one episode
         for state, joint_act in zip(obs_ep, acts_ep):
             try:
                 jax_state = from_legacy_state(terrain, state)
                 feats_p0, feats_p1 = featurize_state_64(terrain, jax_state)
-            except Exception:
-                # Skip corrupted / truncated states at episode boundaries.
+            except Exception as exc:
+                # Silently skip only boundary/corrupted states.  Emit a warning
+                # on the first failure so problems are visible during debugging.
+                if not features:  # first failure for this worker
+                    print(
+                        f"\n    [WARN] worker {worker_id} / {jax_layout}: "
+                        f"from_legacy_state or featurize_state_64 raised "
+                        f"{type(exc).__name__}: {exc} (further failures silenced)"
+                    )
                 continue
 
             a0, a1 = _joint_action_to_ints(joint_act)
@@ -151,9 +159,6 @@ def featurize_layout_split(df, jax_layout: str, split_label: str, terrain) -> di
     skipped = 0
 
     for worker_id in workers:
-        # Pass the pre-filtered layout_df so the function only searches
-        # the relevant rows, and pass jax_layout (engine name) because
-        # get_overcooked_traj_for_worker_layout does the JS name mapping itself.
         feats, acts = _featurize_worker(worker_id, layout_df, jax_layout, terrain)
         if not feats:
             skipped += 1
@@ -176,7 +181,6 @@ def featurize_layout_split(df, jax_layout: str, split_label: str, terrain) -> di
 
     print(f" → {features_arr.shape[0]:,} timesteps, feat_dim={features_arr.shape[1]}")
 
-    # Sanity checks
     assert features_arr.shape[1] == 64, (
         f"Expected 64-dim features, got shape {features_arr.shape}. "
         "Verify featurize_state_64 in encoding/bc_features.py."
