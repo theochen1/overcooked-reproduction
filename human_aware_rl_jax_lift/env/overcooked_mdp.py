@@ -24,7 +24,15 @@ def _move_if_direction(terrain: Terrain, pos: jnp.ndarray, ori: jnp.ndarray, act
     is_stay = action == ACTION_STAY
 
     proposed = pos + DIR_VECS[action]
-    valid = in_bounds(terrain.grid, proposed) & terrain.walkable_mask[pos_to_yx(proposed)]
+    h, w = terrain.grid.shape
+    clipped = jnp.array(
+        [
+            jnp.clip(proposed[0], 0, w - 1),
+            jnp.clip(proposed[1], 0, h - 1),
+        ],
+        dtype=jnp.int32,
+    )
+    valid = in_bounds(terrain.grid, proposed) & terrain.walkable_mask[pos_to_yx(clipped)]
     new_pos = jnp.where((~is_interact) & valid, proposed, pos)
     new_ori = jnp.where((~is_interact) & (~is_stay), action, ori)
     return new_pos, new_ori

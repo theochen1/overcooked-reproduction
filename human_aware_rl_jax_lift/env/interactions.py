@@ -75,9 +75,27 @@ def resolve_interacts(
         ctr_obj = st.counter_obj[ctr_idx]
         can_place_on_counter = (held_obj != OBJ_NONE) & ctr_exists & (ctr_obj == OBJ_NONE)
         can_pick_from_counter = (held_obj == OBJ_NONE) & ctr_exists & (ctr_obj != OBJ_NONE)
+        placed_soup = can_place_on_counter & (held_obj == OBJ_SOUP)
+        picked_soup = can_pick_from_counter & (ctr_obj == OBJ_SOUP)
+
+        ctr_soup = st.counter_soup[ctr_idx]
+        held_soup = st.held_soup[player_idx]
+        empty_soup = jnp.zeros((3,), dtype=jnp.int32)
+
+        next_ctr_soup = jnp.where(
+            placed_soup,
+            held_soup,
+            jnp.where(picked_soup, empty_soup, ctr_soup),
+        )
+        next_held_soup = jnp.where(
+            picked_soup,
+            ctr_soup,
+            jnp.where(placed_soup, empty_soup, held_soup),
+        )
 
         st = st.replace(
             counter_obj=st.counter_obj.at[ctr_idx].set(jnp.where(can_place_on_counter, held_obj, ctr_obj)),
+            counter_soup=st.counter_soup.at[ctr_idx].set(next_ctr_soup),
             held_obj=st.held_obj.at[player_idx].set(
                 jnp.where(
                     can_place_on_counter,
@@ -85,6 +103,7 @@ def resolve_interacts(
                     jnp.where(can_pick_from_counter, ctr_obj, held_obj),
                 )
             ),
+            held_soup=st.held_soup.at[player_idx].set(next_held_soup),
         )
 
         # Onion/Tomato/Dish pickup

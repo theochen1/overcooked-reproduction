@@ -41,6 +41,7 @@ DIR_VECS = jnp.array(
         [1, 0],   # EAST
         [-1, 0],  # WEST
         [0, 0],   # STAY
+        [0, 0],   # INTERACT
     ],
     dtype=jnp.int32,
 )
