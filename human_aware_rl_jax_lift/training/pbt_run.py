@@ -61,7 +61,8 @@ def _cfg_from_member_params(base_cfg: PPOConfig, params: Dict[str, float]) -> PP
 
 def _rebuild_state_with_lr(state: TrainState, learning_rate: float, max_grad_norm: float) -> TrainState:
     tx = optax.chain(optax.clip_by_global_norm(max_grad_norm), optax.adam(learning_rate))
-    return TrainState.create(apply_fn=state.apply_fn, params=state.params, tx=tx)
+    # Preserve optimizer accumulators and params while swapping schedule hyperparameters.
+    return state.replace(tx=tx)
 
 
 @dataclass
@@ -73,6 +74,28 @@ class _MemberRuntime:
     total_steps: int
     logs: Dict[str, list]
     seed: int
+
+
+def _evaluate_member(member: _MemberRuntime, num_selection_games: int) -> float:
+    """
+    Evaluate by rolling out until at least `num_selection_games` episodes are observed.
+    Returns mean sparse episode reward.
+    """
+    rng = set_global_seed(member.seed + 999_999 + member.total_steps)
+    sparse_means = []
+    episodes = 0
+    while episodes < num_selection_games:
+        rng, eval_rng = jax.random.split(rng)
+        rollout = member.runner.collect_rollout(eval_rng, self_play_randomization=0.0)
+        eps = int(rollout.infos.get("episodes_this_rollout", 0))
+        if eps > 0:
+            sparse_means.append(float(rollout.infos["ep_sparse_rew_mean"]))
+            episodes += eps
+        else:
+            # Avoid infinite loops if no episodes terminate in one rollout.
+            sparse_means.append(float(rollout.infos["ep_sparse_rew_mean"]))
+            episodes += 1
+    return float(np.mean(sparse_means))
 
 
 def pbt_run(
@@ -139,8 +162,7 @@ def pbt_run(
         updates_this_selection = min(pbt_config.iter_per_selection, updates_total - updates_done)
         if updates_this_selection <= 0:
             break
-        fitnesses = []
-        for midx, member in enumerate(members):
+        for member in members:
             rng = set_global_seed(member.seed + updates_done)
             for _ in range(updates_this_selection):
                 member.total_steps += batch_size
@@ -188,7 +210,9 @@ def pbt_run(
                 member.logs["loss"].append(float(np.mean(epoch_losses)) if epoch_losses else 0.0)
                 member.logs["eprewmean"].append(float(rollout.infos["eprewmean"]))
                 member.logs["ep_sparse_rew_mean"].append(float(rollout.infos["ep_sparse_rew_mean"]))
-            fitnesses.append(member.logs["ep_sparse_rew_mean"][-1] if member.logs["ep_sparse_rew_mean"] else 0.0)
+
+        # Selection fitness from explicit evaluation episodes (Appendix D).
+        fitnesses = [_evaluate_member(member, pbt_config.num_selection_games) for member in members]
 
         trainer.update_fitness(fitnesses)
         trainer.exploit_and_explore()
@@ -205,7 +229,7 @@ def pbt_run(
                     learning_rate=member.cfg.learning_rate,
                     max_grad_norm=member.cfg.max_grad_norm,
                 )
-                member.runner.train_state = member.train_state
+            member.runner.train_state = member.train_state
 
     # Persist per-member artifacts in ppo-compatible format.
     from pathlib import Path

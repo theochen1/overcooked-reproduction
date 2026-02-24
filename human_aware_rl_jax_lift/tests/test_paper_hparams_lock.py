@@ -13,6 +13,15 @@ def test_ppo_sp_table_lock():
         h = get_hparams("ppo_sp", layout)
         assert h["learning_rate"] == lr
         assert h["vf_coef"] == vf
+    expected_shaping = {
+        "simple": int(2.5e6),
+        "unident_s": int(2.5e6),
+        "random1": int(3.5e6),
+        "random0": int(2.5e6),
+        "random3": int(2.5e6),
+    }
+    for layout, rew_h in expected_shaping.items():
+        assert get_hparams("ppo_sp", layout)["rew_shaping_horizon"] == rew_h
 
 
 def test_ppo_bc_table_lock():
@@ -38,3 +47,5 @@ def test_pbt_table_lock():
     assert h["population_size"] == 3
     assert h["mutation_probability"] == 0.33
     assert h["mutation_factors"] == [0.75, 1.25]
+    assert h["iter_per_selection"] == 9
+    assert h["num_selection_games"] == 6
