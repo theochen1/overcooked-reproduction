@@ -9,9 +9,14 @@ Layout name mapping (DataFrame → engine/.layout file):
   random0            → random0
   random3            → random3
 
+NOTE on get_overcooked_traj_for_worker_layout:
+  This function internally calls PYTHON_LAYOUT_NAME_TO_JS_NAME[layout_name] to
+  translate engine names (e.g. 'simple') → DataFrame names (e.g. 'cramped_room').
+  So it MUST be called with the engine/JAX name, not the DataFrame name.
+
 Pipeline per timestep (both players):
   DataFrame row
-    → get_overcooked_traj_for_worker_layout()  (legacy OvercookedState objects)
+    → get_overcooked_traj_for_worker_layout(df, worker_id, jax_layout)
     → from_legacy_state(terrain, state)         (JAX OvercookedState)
     → featurize_state_64(terrain, jax_state)    (feats_p0, feats_p1), each float32[64]
     → {"features": np.ndarray[N,64], "actions": np.ndarray[N]}
@@ -35,8 +40,9 @@ from pathlib import Path
 import numpy as np
 
 # ── Layout name mapping ────────────────────────────────────────────────────────
-# Key   = JAX/engine name (used by parse_layout and train_bc.py --layout)
-# Value = legacy DataFrame name (used by the human study web interface)
+# Key   = JAX/engine name  (what parse_layout, train_bc.py, and
+#                            get_overcooked_traj_for_worker_layout all expect)
+# Value = DataFrame/JS name (what appears in the layout_name column of the pkl)
 JAX_TO_LEGACY: dict[str, str] = {
     "simple":    "cramped_room",
     "unident_s": "asymmetric_advantages",
@@ -47,22 +53,7 @@ JAX_TO_LEGACY: dict[str, str] = {
 LAYOUTS = list(JAX_TO_LEGACY.keys())
 
 # ── Path setup ─────────────────────────────────────────────────────────────────
-# Script is at: REPO_ROOT/human_aware_rl_jax_lift/scripts/prepare_bc_data.py
-# parents[0] = scripts/, parents[1] = human_aware_rl_jax_lift/, parents[2] = REPO_ROOT
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-# Add legacy package roots to sys.path so they can be imported without a
-# working editable install (the legacy setup.py has no __init__.py at the
-# top level so find_packages() finds nothing and pip's editable install
-# can't auto-register the namespace).
-#
-# Insert order matters: later inserts go to position 0 and are searched first.
-#   sys.path[0] -> REPO_ROOT/human_aware_rl/overcooked_ai   (overcooked_ai_py)
-#   sys.path[1] -> REPO_ROOT/human_aware_rl                 (human_aware_rl.*)
-# human_aware_rl_jax_lift is already importable via its own editable install;
-# do NOT insert REPO_ROOT here or Python will find 'human_aware_rl' as a
-# namespace package pointing at the project directory instead of the inner
-# human_aware_rl/human_aware_rl/ sub-package.
 sys.path.insert(0, str(REPO_ROOT / "human_aware_rl"))
 sys.path.insert(0, str(REPO_ROOT / "human_aware_rl" / "overcooked_ai"))
 
@@ -88,9 +79,14 @@ def _joint_action_to_ints(joint_act) -> tuple[int, int]:
     return a0, a1
 
 
-def _featurize_worker(worker_id, df, legacy_layout: str, terrain) -> tuple[list, list]:
+def _featurize_worker(worker_id, df, jax_layout: str, terrain) -> tuple[list, list]:
     """
-    Featurize all timesteps for one worker on one legacy layout.
+    Featurize all timesteps for one worker on one layout.
+
+    `jax_layout` is the engine/JAX name (e.g. 'simple'). It is passed directly
+    to get_overcooked_traj_for_worker_layout which does PYTHON_LAYOUT_NAME_TO_JS_NAME
+    internally to translate to the DataFrame name ('cramped_room').
+
     Returns (features_list, actions_list) where each feature is float32[64]
     and each action is an int. Entries for both players are interleaved.
     """
@@ -98,7 +94,8 @@ def _featurize_worker(worker_id, df, legacy_layout: str, terrain) -> tuple[list,
     from human_aware_rl_jax_lift.env.compat import from_legacy_state
     from human_aware_rl_jax_lift.encoding.bc_features import featurize_state_64
 
-    traj, _ = get_overcooked_traj_for_worker_layout(df, worker_id, legacy_layout)
+    # Pass jax_layout (engine name) — the function maps it to the DataFrame name internally.
+    traj, _ = get_overcooked_traj_for_worker_layout(df, worker_id, jax_layout)
     if traj is None:
         return [], []
 
@@ -106,7 +103,6 @@ def _featurize_worker(worker_id, df, legacy_layout: str, terrain) -> tuple[list,
     ep_acts = traj["ep_actions"]
 
     # Normalise: some versions wrap in an extra list (multi-episode), some don't.
-    # Detect by checking whether the first element is itself a list of states.
     if isinstance(ep_obs[0], list):
         obs_episodes  = ep_obs
         acts_episodes = ep_acts
@@ -155,7 +151,10 @@ def featurize_layout_split(df, jax_layout: str, split_label: str, terrain) -> di
     skipped = 0
 
     for worker_id in workers:
-        feats, acts = _featurize_worker(worker_id, layout_df, legacy_layout, terrain)
+        # Pass the pre-filtered layout_df so the function only searches
+        # the relevant rows, and pass jax_layout (engine name) because
+        # get_overcooked_traj_for_worker_layout does the JS name mapping itself.
+        feats, acts = _featurize_worker(worker_id, layout_df, jax_layout, terrain)
         if not feats:
             skipped += 1
             continue
@@ -223,14 +222,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Lazy imports so the script fails fast on bad paths before heavy imports.
     import pandas as pd
     from human_aware_rl_jax_lift.env.layouts import parse_layout
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Load DataFrames ──
     print("Loading DataFrames...")
     df_train = pd.read_pickle(args.train_pkl)
     df_test  = pd.read_pickle(args.test_pkl)
@@ -239,10 +236,8 @@ def main() -> None:
     print(f"  Layout names found in train: {sorted(df_train['layout_name'].unique())}")
     print()
 
-    # ── Process each layout ──
     for jax_layout in args.layouts:
         print(f"=== {jax_layout} ===")
-        # parse_layout uses the JAX/engine name to read the .layout file
         terrain = parse_layout(jax_layout)
 
         payload: dict = {}
@@ -254,7 +249,6 @@ def main() -> None:
             pickle.dump(payload, f)
         print(f"  Saved → {out_path}\n")
 
-    # ── Final verification hint ──
     print("Done. Verify with:")
     print(
         "  python -c \""
@@ -264,11 +258,6 @@ def main() -> None:
         "for s,v in pickle.load(open(f'human_aware_rl_jax_lift/data/bc_data/{L}.pkl','rb')).items()]"
         "\""
     )
-    print()
-    print("Expected output (~9 000 timesteps per layout/split, feature_dim=64):")
-    print("  simple     train (N, 64) (N,)")
-    print("  simple     test  (N, 64) (N,)")
-    print("  ...")
 
 
 if __name__ == "__main__":
