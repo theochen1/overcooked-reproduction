@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "human-aware-rl-jax-lift"
+version = "0.1.0"
+description = "JAX liftover of legacy human_aware_rl codebase"
+requires-python = ">=3.10"
+dependencies = [
+  "jax",
+  "jaxlib",
+  "flax",
+  "optax",
+  "numpy",
+  "pytest",
+]
