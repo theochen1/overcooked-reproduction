@@ -1,5 +1,6 @@
 """Population-based training loop built on PPO runner primitives."""
 
+import copy
 from dataclasses import dataclass, replace
 from typing import Dict, List
 
@@ -91,10 +92,6 @@ def _evaluate_member(member: _MemberRuntime, num_selection_games: int) -> float:
         if eps > 0:
             sparse_means.append(float(rollout.infos["ep_sparse_rew_mean"]))
             episodes += eps
-        else:
-            # Avoid infinite loops if no episodes terminate in one rollout.
-            sparse_means.append(float(rollout.infos["ep_sparse_rew_mean"]))
-            episodes += 1
     return float(np.mean(sparse_means))
 
 
@@ -215,9 +212,16 @@ def pbt_run(
         fitnesses = [_evaluate_member(member, pbt_config.num_selection_games) for member in members]
 
         trainer.update_fitness(fitnesses)
-        trainer.exploit_and_explore()
+        copy_map = trainer.exploit_and_explore()
         updates_done += updates_this_selection
         selection_history.append({"fitnesses": list(map(float, fitnesses))})
+
+        # Copy network weights best -> replaced members before hyperparam propagation.
+        for replaced_idx, src_idx in copy_map.items():
+            members[replaced_idx].train_state = members[replaced_idx].train_state.replace(
+                params=copy.deepcopy(members[src_idx].train_state.params)
+            )
+            members[replaced_idx].runner.train_state = members[replaced_idx].train_state
 
         # Apply mutated hyperparams for next selection window.
         for midx, member in enumerate(members):

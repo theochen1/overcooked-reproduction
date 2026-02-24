@@ -36,15 +36,19 @@ class PBTTrainer:
         self.config = config or PBTConfig()
         self.population = [PopulationMember(copy.deepcopy(base_hparams)) for _ in range(self.config.population_size)]
 
-    def exploit_and_explore(self):
-        ranked = sorted(self.population, key=lambda m: m.fitness)
+    def exploit_and_explore(self) -> dict[int, int]:
+        """Exploit+explore and return {replaced_idx: source_idx}."""
+        ranked = sorted(enumerate(self.population), key=lambda x: x[1].fitness)
         k = max(1, self.config.population_size // 4)
         worst = ranked[:k]
         best = ranked[-k:]
-        for w in worst:
-            src = random.choice(best)
+        copy_map: dict[int, int] = {}
+        for widx, w in worst:
+            bidx, src = random.choice(best)
             w.params = copy.deepcopy(src.params)
             w.mutate(self.config)
+            copy_map[widx] = bidx
+        return copy_map
 
     def update_fitness(self, fitnesses: List[float]):
         for m, f in zip(self.population, fitnesses):
