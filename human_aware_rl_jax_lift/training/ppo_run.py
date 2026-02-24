@@ -54,10 +54,10 @@ def ppo_run(
     config: PPOConfig,
     other_agent_type: str = "sp",
     self_play_horizon: tuple[int, int] | None = None,
-    rew_shaping_horizon: int = 0,
+    rew_shaping_horizon: int | None = None,
     save_dir: str = "data/ppo_runs",
     ex_name: str | None = None,
-    lr_annealing: float = 1.0,
+    lr_annealing: float | None = None,
     best_bc_model_paths: dict | None = None,
 ) -> List[dict]:
     """
@@ -65,6 +65,13 @@ def ppo_run(
 
     Returns per-seed summary dictionaries.
     """
+    if self_play_horizon is None:
+        self_play_horizon = config.self_play_horizon
+    if rew_shaping_horizon is None:
+        rew_shaping_horizon = config.rew_shaping_horizon
+    if lr_annealing is None:
+        lr_annealing = config.lr_annealing
+
     terrain = parse_layout(layout_name)
     run_name = ex_name or f"ppo_{other_agent_type}_{layout_name}"
     root_dir = Path(save_dir) / run_name
@@ -136,9 +143,7 @@ def ppo_run(
 
         for update in range(num_updates):
             total_steps += batch_size
-            shaping_factor = float(
-                annealed_shaping_factor(1.0, float(rew_shaping_horizon), jnp.asarray(total_steps, dtype=jnp.float32))
-            )
+            shaping_factor = float(annealed_shaping_factor(1.0, float(rew_shaping_horizon), jnp.asarray(total_steps)))
             vec_env.reward_shaping_params = _scaled_reward_params(shaping_factor)
             sp_factor = compute_self_play_factor(total_steps, self_play_horizon)
 

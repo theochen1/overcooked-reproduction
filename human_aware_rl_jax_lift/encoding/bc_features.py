@@ -14,14 +14,22 @@ from human_aware_rl_jax_lift.env.state import (
 )
 
 
+def _closest_delta_dist(src: jnp.ndarray, positions: jnp.ndarray, mask: jnp.ndarray):
+    """Return closest delta + distance under a static-shape mask."""
+    deltas = (positions - src[None, :]).astype(jnp.float32)
+    manhattan = jnp.abs(deltas[:, 0]) + jnp.abs(deltas[:, 1])
+    large = jnp.array(1e6, dtype=jnp.float32)
+    masked_dist = jnp.where(mask, manhattan, large)
+    idx = jnp.argmin(masked_dist)
+    has_any = jnp.any(mask)
+    best_delta = jnp.where(has_any, deltas[idx], jnp.zeros((2,), dtype=jnp.float32))
+    best_dist = jnp.where(has_any, masked_dist[idx], large)
+    return best_delta, best_dist, has_any
+
+
 def _closest_delta(src: jnp.ndarray, positions: jnp.ndarray, mask: jnp.ndarray) -> jnp.ndarray:
-    valid_positions = positions[mask]
-    if valid_positions.shape[0] == 0:
-        return jnp.zeros((2,), dtype=jnp.float32)
-    d = valid_positions - src[None, :]
-    manhattan = jnp.abs(d[:, 0]) + jnp.abs(d[:, 1])
-    idx = jnp.argmin(manhattan)
-    return d[idx].astype(jnp.float32)
+    delta, _, _ = _closest_delta_dist(src, positions, mask)
+    return delta
 
 
 def _held_obj_one_hot(obj_id: jnp.ndarray) -> jnp.ndarray:
@@ -47,7 +55,11 @@ def _wall_features(terrain: Terrain, pos: jnp.ndarray) -> jnp.ndarray:
     for d in dirs:
         p = pos + d
         in_bounds = (p[0] >= 0) & (p[1] >= 0) & (p[0] < w) & (p[1] < h)
-        is_wall = ~in_bounds | (~terrain.walkable_mask[p[1], p[0]])
+        clipped = jnp.array(
+            [jnp.clip(p[0], 0, w - 1), jnp.clip(p[1], 0, h - 1)],
+            dtype=jnp.int32,
+        )
+        is_wall = ~in_bounds | (~terrain.walkable_mask[clipped[1], clipped[0]])
         out.append(jnp.where(is_wall, 1.0, 0.0))
     return jnp.array(out, dtype=jnp.float32)
 
@@ -86,25 +98,30 @@ def featurize_state_64(terrain: Terrain, state: OvercookedState):
         cooking_pot_mask = pot_valid & (pot_type == SOUP_ONION) & (pot_items == 3) & (pot_cook < terrain.cook_time)
         ready_pot_mask = pot_valid & (pot_type == SOUP_ONION) & (pot_items == 3) & (pot_cook >= terrain.cook_time)
 
-        counter_onion = terrain.counter_positions[(state.counter_obj == OBJ_ONION) & terrain.counter_mask]
-        onion_positions = jnp.concatenate([terrain.onion_disp_positions[terrain.onion_disp_mask], counter_onion], axis=0) if counter_onion.size else terrain.onion_disp_positions[terrain.onion_disp_mask]
+        counter_onion_mask = (state.counter_obj == OBJ_ONION) & terrain.counter_mask
+        counter_dish_mask = (state.counter_obj == OBJ_DISH) & terrain.counter_mask
+        counter_soup_mask = (state.counter_obj == OBJ_SOUP) & terrain.counter_mask
 
-        counter_dish = terrain.counter_positions[(state.counter_obj == OBJ_DISH) & terrain.counter_mask]
-        dish_positions = jnp.concatenate([terrain.dish_disp_positions[terrain.dish_disp_mask], counter_dish], axis=0) if counter_dish.size else terrain.dish_disp_positions[terrain.dish_disp_mask]
+        onion_disp_delta, onion_disp_dist, onion_disp_valid = _closest_delta_dist(
+            pos, terrain.onion_disp_positions, terrain.onion_disp_mask
+        )
+        onion_ctr_delta, onion_ctr_dist, onion_ctr_valid = _closest_delta_dist(
+            pos, terrain.counter_positions, counter_onion_mask
+        )
+        use_onion_ctr = onion_ctr_valid & ((~onion_disp_valid) | (onion_ctr_dist < onion_disp_dist))
+        onion_delta = jnp.where(use_onion_ctr, onion_ctr_delta, onion_disp_delta)
 
-        counter_soup = terrain.counter_positions[(state.counter_obj == OBJ_SOUP) & terrain.counter_mask]
-        serving_positions = terrain.serve_positions[terrain.serve_mask]
+        dish_disp_delta, dish_disp_dist, dish_disp_valid = _closest_delta_dist(
+            pos, terrain.dish_disp_positions, terrain.dish_disp_mask
+        )
+        dish_ctr_delta, dish_ctr_dist, dish_ctr_valid = _closest_delta_dist(
+            pos, terrain.counter_positions, counter_dish_mask
+        )
+        use_dish_ctr = dish_ctr_valid & ((~dish_disp_valid) | (dish_ctr_dist < dish_disp_dist))
+        dish_delta = jnp.where(use_dish_ctr, dish_ctr_delta, dish_disp_delta)
 
-        def from_var_positions(var_pos):
-            if var_pos.size == 0:
-                return jnp.zeros((2,), dtype=jnp.float32)
-            d = var_pos - pos[None, :]
-            idx = jnp.argmin(jnp.abs(d[:, 0]) + jnp.abs(d[:, 1]))
-            return d[idx].astype(jnp.float32)
-
-        onion_delta = from_var_positions(onion_positions)
-        dish_delta = from_var_positions(dish_positions)
-        soup_delta = from_var_positions(counter_soup)
+        soup_delta, _, _ = _closest_delta_dist(pos, terrain.counter_positions, counter_soup_mask)
+        serve_delta, _, _ = _closest_delta_dist(pos, terrain.serve_positions, terrain.serve_mask)
         onion_delta = jnp.where((held == OBJ_ONION), jnp.zeros((2,), dtype=jnp.float32), onion_delta)
         dish_delta = jnp.where((held == OBJ_DISH), jnp.zeros((2,), dtype=jnp.float32), dish_delta)
         soup_delta = jnp.where((held == OBJ_SOUP), jnp.zeros((2,), dtype=jnp.float32), soup_delta)
@@ -120,7 +137,7 @@ def featurize_state_64(terrain: Terrain, state: OvercookedState):
             _closest_delta(pos, terrain.pot_positions, ready_pot_mask),
             dish_delta,
             soup_delta,
-            from_var_positions(serving_positions),
+            serve_delta,
             _facing_empty_counter(terrain, state, i),
             _wall_features(terrain, pos),
         ]

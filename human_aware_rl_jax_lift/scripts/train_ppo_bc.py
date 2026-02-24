@@ -8,6 +8,15 @@ from human_aware_rl_jax_lift.training.checkpoints import load_best_bc_model_path
 from human_aware_rl_jax_lift.training.ppo_run import ppo_run
 
 
+DEFAULT_SELF_PLAY_HORIZON = {
+    "simple": (int(5e5), int(3e6)),
+    "unident_s": (int(1e6), int(7e6)),
+    "random1": (int(2e6), int(6e6)),
+    "random0": None,
+    "random3": (int(1e6), int(4e6)),
+}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train PPO models against BC partners.")
     parser.add_argument("--layout", type=str, required=True)
@@ -16,14 +25,21 @@ def main() -> None:
     parser.add_argument("--save_dir", type=str, default="data/ppo_runs")
     parser.add_argument("--bc_paths_file", type=str, default="data/bc_runs/best_bc_model_paths.pkl")
     parser.add_argument("--total_timesteps", type=int, default=int(5e6))
+    parser.add_argument("--self_play_horizon", type=int, nargs=2, default=None)
     args = parser.parse_args()
 
     bc_paths = load_best_bc_model_paths(Path(args.bc_paths_file))
     other_agent_type = f"bc_{args.bc_split}"
+    self_play_horizon = (
+        tuple(args.self_play_horizon)
+        if args.self_play_horizon is not None
+        else DEFAULT_SELF_PLAY_HORIZON.get(args.layout, None)
+    )
     cfg = PPOConfig(
         total_timesteps=args.total_timesteps,
         layout_name=args.layout,
         other_agent_type=other_agent_type,
+        self_play_horizon=self_play_horizon,
     )
     run_name = f"ppo_bc_{args.bc_split}_{args.layout}"
     summaries = ppo_run(
@@ -31,11 +47,8 @@ def main() -> None:
         seeds=list(args.seeds),
         config=cfg,
         other_agent_type=other_agent_type,
-        self_play_horizon=cfg.self_play_horizon,
-        rew_shaping_horizon=cfg.rew_shaping_horizon,
         save_dir=args.save_dir,
         ex_name=run_name,
-        lr_annealing=cfg.lr_annealing,
         best_bc_model_paths=bc_paths,
     )
     print({"run_name": run_name, "num_seeds": len(summaries), "summaries": summaries})

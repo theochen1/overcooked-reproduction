@@ -1,6 +1,7 @@
 """Layout parsing utilities from legacy overcooked .layout files."""
 
 import ast
+import os
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -18,7 +19,7 @@ from .state import (
     Terrain,
 )
 
-LEGACY_LAYOUT_DIR = (
+_DEFAULT_LEGACY_LAYOUT_DIR = (
     Path(__file__).resolve().parents[2]
     / "human_aware_rl"
     / "overcooked_ai"
@@ -26,6 +27,8 @@ LEGACY_LAYOUT_DIR = (
     / "data"
     / "layouts"
 )
+_PACKAGE_LAYOUT_DIR = Path(__file__).resolve().parent / "data" / "layouts"
+LAYOUT_DIR_ENV = "OVERCOOKED_LAYOUT_DIR"
 
 CHAR_TO_TERRAIN = {
     " ": TERRAIN_EMPTY,
@@ -54,8 +57,14 @@ def _extract_grid_lines(grid_str: str) -> List[str]:
 
 def parse_layout(layout_name: str) -> Terrain:
     """Parse a legacy `.layout` file into a static Terrain struct."""
-
-    layout_path = LEGACY_LAYOUT_DIR / f"{layout_name}.layout"
+    env_override = os.environ.get(LAYOUT_DIR_ENV)
+    if env_override:
+        base_dir = Path(env_override)
+    elif _PACKAGE_LAYOUT_DIR.exists():
+        base_dir = _PACKAGE_LAYOUT_DIR
+    else:
+        base_dir = _DEFAULT_LEGACY_LAYOUT_DIR
+    layout_path = base_dir / f"{layout_name}.layout"
     data = ast.literal_eval(layout_path.read_text())
     lines = _extract_grid_lines(data["grid"])
 

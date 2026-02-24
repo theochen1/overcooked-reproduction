@@ -21,11 +21,8 @@ def main() -> None:
         seeds=list(args.seeds),
         config=cfg,
         other_agent_type="sp",
-        self_play_horizon=cfg.self_play_horizon,
-        rew_shaping_horizon=cfg.rew_shaping_horizon,
         save_dir=args.save_dir,
         ex_name=run_name,
-        lr_annealing=cfg.lr_annealing,
     )
     print({"run_name": run_name, "num_seeds": len(summaries), "summaries": summaries})
 

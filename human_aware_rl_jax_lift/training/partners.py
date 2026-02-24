@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from human_aware_rl_jax_lift.agents.bc.model import BCPolicy
+from human_aware_rl_jax_lift.agents.bc.agent import BCAgent
 from human_aware_rl_jax_lift.encoding.bc_features import featurize_state_64
 from human_aware_rl_jax_lift.env.state import Terrain
 
@@ -40,9 +40,17 @@ class BCPartner:
     params: dict
     terrain: Terrain
     stochastic: bool = True
+    stuck_time: int = 3
+    _agents: list[BCAgent] | None = None
 
     @classmethod
-    def from_path(cls, bc_model_path: str | Path, terrain: Terrain, stochastic: bool = True) -> "BCPartner":
+    def from_path(
+        cls,
+        bc_model_path: str | Path,
+        terrain: Terrain,
+        stochastic: bool = True,
+        stuck_time: int = 3,
+    ) -> "BCPartner":
         import pickle
 
         path = Path(bc_model_path)
@@ -50,20 +58,39 @@ class BCPartner:
             payload = pickle.load(f)
         # Supports saving plain params or wrapped payload.
         params = payload.get("params", payload) if isinstance(payload, dict) else payload
-        return cls(params=params, terrain=terrain, stochastic=stochastic)
+        return cls(params=params, terrain=terrain, stochastic=stochastic, stuck_time=stuck_time)
+
+    def _ensure_agents(self, num_envs: int) -> None:
+        if self._agents is not None and len(self._agents) == num_envs:
+            return
+        self._agents = [
+            BCAgent(params=self.params, stochastic=self.stochastic, stuck_time=self.stuck_time)
+            for _ in range(num_envs)
+        ]
 
     def act(self, obs1_batch: np.ndarray, rng: jax.Array, **kwargs) -> np.ndarray:
         states = kwargs["states"]
         agent_idx = kwargs["agent_idx"]
-        bc_feats = []
+        num_envs = len(states)
+        self._ensure_agents(num_envs)
+        assert self._agents is not None
+
+        rngs = jax.random.split(rng, num_envs)
+        actions = np.zeros((num_envs,), dtype=np.int32)
         for i, st in enumerate(states):
+            # Auto-reset unstuck history when env has just reset.
+            if int(st.timestep) == 0 and self._agents[i].pos_history:
+                self._agents[i] = BCAgent(params=self.params, stochastic=self.stochastic, stuck_time=self.stuck_time)
+
             f0, f1 = featurize_state_64(self.terrain, st)
             feat = f1 if int(agent_idx[i]) == 0 else f0
-            bc_feats.append(np.asarray(feat, dtype=np.float32))
-        bc_feats_batch = jnp.asarray(np.stack(bc_feats), dtype=jnp.float32)
-        logits = BCPolicy().apply(self.params, bc_feats_batch)
-        acts = _sample_actions_from_logits(logits, rng, self.stochastic)
-        return np.asarray(acts, dtype=np.int32)
+            act = self._agents[i].sample_action(jnp.asarray(feat, dtype=jnp.float32), rngs[i])
+            # Track position for the controlled "other" agent in this env.
+            other_idx = 1 - int(agent_idx[i])
+            pos_xy = tuple(np.asarray(st.player_pos[other_idx]).tolist())
+            self._agents[i].update_history(pos_xy, int(act))
+            actions[i] = int(act)
+        return actions
 
 
 @dataclass

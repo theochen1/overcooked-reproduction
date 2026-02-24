@@ -12,6 +12,13 @@ from .partners import Partner
 from .vec_env import VectorizedEnv
 
 
+def _policy_step_impl(apply_fn, params, obs: jnp.ndarray, rng: jax.Array):
+    logits, values = apply_fn(params, obs)
+    actions = jax.random.categorical(rng, logits, axis=-1).astype(jnp.int32)
+    logp = jax.nn.log_softmax(logits)[jnp.arange(logits.shape[0]), actions]
+    return actions, values, logp
+
+
 @dataclass
 class RolloutBatch:
     obs: np.ndarray
@@ -40,14 +47,19 @@ class RolloutRunner:
         self.other_agent = other_agent
         self.horizon = int(horizon)
         self.trajectory_self_play = bool(trajectory_self_play)
+        self._policy_step_jit = jax.jit(
+            lambda params, obs, rng: _policy_step_impl(self.train_state.apply_fn, params, obs, rng)
+        )
         _, self.obs0, self.obs1, self.agent_idx = self.vec_env.reset_all()
 
     def _policy_step(
         self, obs: np.ndarray, rng: jax.Array
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        logits, values = self.train_state.apply_fn(self.train_state.params, jnp.asarray(obs, dtype=jnp.float32))
-        actions = jax.random.categorical(rng, logits, axis=-1).astype(jnp.int32)
-        logp = jax.nn.log_softmax(logits)[jnp.arange(logits.shape[0]), actions]
+        actions, values, logp = self._policy_step_jit(
+            self.train_state.params,
+            jnp.asarray(obs, dtype=jnp.float32),
+            rng,
+        )
         return (
             np.asarray(actions, dtype=np.int32),
             np.asarray(values, dtype=np.float32),

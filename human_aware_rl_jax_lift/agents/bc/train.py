@@ -5,6 +5,7 @@ from typing import Dict
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optax
 from flax.training.train_state import TrainState
 
@@ -44,8 +45,11 @@ def train_bc(features: jnp.ndarray, labels: jnp.ndarray, rng, config: BCTrainCon
     state = create_train_state(rng, features.shape[-1], config)
     n = features.shape[0]
     for _ in range(config.num_epochs):
+        perm = np.random.permutation(n)
+        features_epoch = features[perm]
+        labels_epoch = labels[perm]
         for i in range(0, n, config.batch_size):
-            xb = features[i : i + config.batch_size]
-            yb = labels[i : i + config.batch_size]
+            xb = features_epoch[i : i + config.batch_size]
+            yb = labels_epoch[i : i + config.batch_size]
             state, _ = train_step(state, xb, yb)
     return {"state": state}
