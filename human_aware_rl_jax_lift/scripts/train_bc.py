@@ -30,8 +30,14 @@ def _extract_features_labels(payload: Any, layout: str, split: str) -> Tuple[np.
     )
 
 
-def _extract_from_human_dataframe(data_path: str, layout: str) -> Tuple[np.ndarray, np.ndarray]:
-    """Fallback path: parse legacy human dataframe into BC features/actions."""
+def _extract_from_human_dataframe(
+    data_path: str,
+    layout: str,
+    split: str,
+    num_train_trajs: int | None,
+    split_seed: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Fallback path: parse legacy human dataframe into split BC features/actions."""
     from human_aware_rl.human.process_dataframes import get_trajs_from_data
 
     trajs = get_trajs_from_data(
@@ -40,14 +46,31 @@ def _extract_from_human_dataframe(data_path: str, layout: str) -> Tuple[np.ndarr
         ordered_trajs=True,
         human_ai_trajs=False,
     )
+    n_eps = len(trajs["ep_observations"])
+    if n_eps == 0:
+        raise ValueError(f"No BC trajectories found for layout '{layout}' in {data_path}")
+    n_train = (n_eps // 2) if num_train_trajs is None else int(num_train_trajs)
+    if not (0 < n_train < n_eps):
+        raise ValueError(
+            f"Invalid split size: num_train_trajs={n_train} with n_episodes={n_eps}. "
+            "Expected 0 < num_train_trajs < n_episodes."
+        )
+    rng = np.random.RandomState(int(split_seed))
+    perm = rng.permutation(n_eps)
+    train_idx = set(int(i) for i in perm[:n_train])
+    use_train = split == "train"
+
     obs_flat, acts_flat = [], []
-    for ep_obs, ep_acts in zip(trajs["ep_observations"], trajs["ep_actions"]):
+    for ep_i, (ep_obs, ep_acts) in enumerate(zip(trajs["ep_observations"], trajs["ep_actions"])):
+        in_train = ep_i in train_idx
+        if use_train != in_train:
+            continue
         for ob, act in zip(ep_obs, ep_acts):
             obs_flat.append(np.asarray(ob, dtype=np.float32))
             act_idx = int(np.asarray(act).reshape(-1)[0])
             acts_flat.append(act_idx)
     if not obs_flat:
-        raise ValueError(f"No BC trajectories found for layout '{layout}' in {data_path}")
+        raise ValueError(f"No BC trajectories after split='{split}' for layout '{layout}' in {data_path}")
     return np.asarray(obs_flat, dtype=np.float32), np.asarray(acts_flat, dtype=np.int32)
 
 
@@ -93,6 +116,8 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--adam_eps", type=float, default=1e-8)
+    parser.add_argument("--num_train_trajs", type=int, default=None)
+    parser.add_argument("--split_seed", type=int, default=0)
     parser.add_argument("--save_dir", type=str, default="data/bc_runs")
     args = parser.parse_args()
 
@@ -101,7 +126,13 @@ def main() -> None:
     try:
         features, actions = _extract_features_labels(payload, args.layout, args.split)
     except ValueError:
-        features, actions = _extract_from_human_dataframe(args.data_path, args.layout)
+        features, actions = _extract_from_human_dataframe(
+            args.data_path,
+            args.layout,
+            args.split,
+            args.num_train_trajs,
+            args.split_seed,
+        )
 
     save_root = Path(args.save_dir)
     save_root.mkdir(parents=True, exist_ok=True)
