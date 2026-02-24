@@ -47,10 +47,24 @@ JAX_TO_LEGACY: dict[str, str] = {
 LAYOUTS = list(JAX_TO_LEGACY.keys())
 
 # ── Path setup ─────────────────────────────────────────────────────────────────
+# Script is at: REPO_ROOT/human_aware_rl_jax_lift/scripts/prepare_bc_data.py
+# parents[0] = scripts/, parents[1] = human_aware_rl_jax_lift/, parents[2] = REPO_ROOT
 REPO_ROOT = Path(__file__).resolve().parents[2]
-# Make both packages importable when running as a script
-sys.path.insert(0, str(REPO_ROOT / "human_aware_rl"))  # legacy human_aware_rl package
-sys.path.insert(0, str(REPO_ROOT))                      # JAX package root
+
+# Add legacy package roots to sys.path so they can be imported without a
+# working editable install (the legacy setup.py has no __init__.py at the
+# top level so find_packages() finds nothing and pip's editable install
+# can't auto-register the namespace).
+#
+# Insert order matters: later inserts go to position 0 and are searched first.
+#   sys.path[0] -> REPO_ROOT/human_aware_rl/overcooked_ai   (overcooked_ai_py)
+#   sys.path[1] -> REPO_ROOT/human_aware_rl                 (human_aware_rl.*)
+# human_aware_rl_jax_lift is already importable via its own editable install;
+# do NOT insert REPO_ROOT here or Python will find 'human_aware_rl' as a
+# namespace package pointing at the project directory instead of the inner
+# human_aware_rl/human_aware_rl/ sub-package.
+sys.path.insert(0, str(REPO_ROOT / "human_aware_rl"))
+sys.path.insert(0, str(REPO_ROOT / "human_aware_rl" / "overcooked_ai"))
 
 _DEFAULT_TRAIN_PKL = (
     REPO_ROOT
@@ -158,8 +172,8 @@ def featurize_layout_split(df, jax_layout: str, split_label: str, terrain) -> di
             f"but found layouts: {sorted(df['layout_name'].unique())}."
         )
 
-    features_arr = np.stack(all_features)          # [N, 64]
-    actions_arr  = np.array(all_actions, dtype=np.int32)  # [N]
+    features_arr = np.stack(all_features)                    # [N, 64]
+    actions_arr  = np.array(all_actions, dtype=np.int32)     # [N]
 
     print(f" → {features_arr.shape[0]:,} timesteps, feat_dim={features_arr.shape[1]}")
 
@@ -252,8 +266,8 @@ def main() -> None:
     )
     print()
     print("Expected output (~9 000 timesteps per layout/split, feature_dim=64):")
-    print("  simple     train (9000, 64) (9000,)")
-    print("  simple     test  (9000, 64) (9000,)")
+    print("  simple     train (N, 64) (N,)")
+    print("  simple     test  (N, 64) (N,)")
     print("  ...")
 
 
