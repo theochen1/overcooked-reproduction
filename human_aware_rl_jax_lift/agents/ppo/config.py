@@ -16,7 +16,7 @@ class PPOConfig:
     gae_lambda: float = 0.98
     clip_eps: float = 0.05
     ent_coef: float = 0.1
-    vf_coef: float = 0.1
+    vf_coef: float = 0.5
     max_grad_norm: float = 0.1
     lr_annealing: float = 1.0
     rew_shaping_horizon: int = 0

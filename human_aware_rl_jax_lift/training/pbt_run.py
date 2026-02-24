@@ -90,6 +90,8 @@ def pbt_run(
     if len(seeds) < pbt_config.population_size:
         raise ValueError("Need at least one seed per population member")
     terrain = parse_layout(layout_name)
+    # Paper Appendix D: PBT uses 50 parallel environments.
+    ppo_config = replace(ppo_config, num_envs=50)
     run_name = ex_name or f"pbt_{layout_name}"
     batch_size = int(ppo_config.num_envs * ppo_config.horizon)
     updates_total = int(total_steps_per_agent // batch_size)

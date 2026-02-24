@@ -16,6 +16,15 @@ DEFAULT_SELF_PLAY_HORIZON = {
     "random3": (int(1e6), int(4e6)),
 }
 
+BC_LAYOUT_DEFAULTS = {
+    # Paper Table 3 (PPOBC)
+    "simple": {"learning_rate": 1e-3, "lr_annealing": 3.0, "vf_coef": 0.5, "rew_shaping_horizon": int(1e6)},
+    "unident_s": {"learning_rate": 1e-3, "lr_annealing": 3.0, "vf_coef": 0.5, "rew_shaping_horizon": int(6e6)},
+    "random1": {"learning_rate": 1e-3, "lr_annealing": 1.5, "vf_coef": 0.5, "rew_shaping_horizon": int(5e6)},
+    "random0": {"learning_rate": 1.5e-3, "lr_annealing": 2.0, "vf_coef": 0.1, "rew_shaping_horizon": int(4e6)},
+    "random3": {"learning_rate": 1.5e-3, "lr_annealing": 3.0, "vf_coef": 0.1, "rew_shaping_horizon": int(4e6)},
+}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train PPO models against BC partners.")
@@ -35,10 +44,15 @@ def main() -> None:
         if args.self_play_horizon is not None
         else DEFAULT_SELF_PLAY_HORIZON.get(args.layout, None)
     )
+    overrides = BC_LAYOUT_DEFAULTS.get(args.layout, {})
     cfg = PPOConfig(
         total_timesteps=args.total_timesteps,
         layout_name=args.layout,
         other_agent_type=other_agent_type,
+        learning_rate=float(overrides.get("learning_rate", 1e-3)),
+        lr_annealing=float(overrides.get("lr_annealing", 1.0)),
+        vf_coef=float(overrides.get("vf_coef", 0.5)),
+        rew_shaping_horizon=int(overrides.get("rew_shaping_horizon", 0)),
         self_play_horizon=self_play_horizon,
     )
     run_name = f"ppo_bc_{args.bc_split}_{args.layout}"
