@@ -1,0 +1,49 @@
+# Frozen paper-faithful constants for training/evaluation.
+# Treat this file as immutable ground truth for reproducibility audits.
+
+environment:
+  horizon: 400
+  reward_delivery: 20
+  cook_time: 20
+  num_items_for_soup: 3
+  action_space:
+    - north
+    - south
+    - east
+    - west
+    - stay
+    - interact
+  layouts:
+    - simple
+    - unident_s
+    - random0
+    - random1
+    - random3
+
+network:
+  conv_filters: 25
+  conv_layers:
+    - {kernel: [5, 5], padding: SAME}
+    - {kernel: [3, 3], padding: SAME}
+    - {kernel: [3, 3], padding: SAME}
+  fc_layers: 3
+  hidden_dim: 32
+
+ppo_defaults:
+  num_envs: 30
+  horizon: 400
+  num_minibatches: 6
+  num_epochs: 8
+  learning_rate: 1.0e-3
+  gamma: 0.99
+  gae_lambda: 0.98
+  clip_eps: 0.05
+  entropy_coef: 0.1
+  value_coef: 0.1
+  max_grad_norm: 0.1
+
+seeds:
+  bc: [5415, 2652, 6440, 1965, 6647]
+  ppo_sp: [2229, 7649, 7225, 9807, 386]
+  ppo_bc_train: [9456, 1887, 5578, 5987, 516]
+  ppo_bc_test: [2888, 7424, 7360, 4467, 184]

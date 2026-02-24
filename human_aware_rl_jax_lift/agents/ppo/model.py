@@ -7,7 +7,7 @@ import jax.numpy as jnp
 class ActorCriticCNN(nn.Module):
     num_actions: int = 6
     num_filters: int = 25
-    hidden_dim: int = 64
+    hidden_dim: int = 32
 
     @nn.compact
     def __call__(self, x: jnp.ndarray):
@@ -15,7 +15,7 @@ class ActorCriticCNN(nn.Module):
         x = nn.leaky_relu(x, negative_slope=0.2)
         x = nn.Conv(self.num_filters, (3, 3), padding="SAME")(x)
         x = nn.leaky_relu(x, negative_slope=0.2)
-        x = nn.Conv(self.num_filters, (3, 3), padding="VALID")(x)
+        x = nn.Conv(self.num_filters, (3, 3), padding="SAME")(x)
         x = nn.leaky_relu(x, negative_slope=0.2)
         x = x.reshape((x.shape[0], -1))
         x = nn.Dense(self.hidden_dim)(x)

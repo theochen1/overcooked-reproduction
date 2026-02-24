@@ -18,8 +18,15 @@ class PPOConfig:
     ent_coef: float = 0.1
     vf_coef: float = 0.1
     max_grad_norm: float = 0.1
+    lr_annealing: float = 1.0
+    rew_shaping_horizon: int = 0
+    self_play_horizon: tuple[int, int] | None = None
+    trajectory_self_play: bool = True
+    save_best_thresh: float = 50.0
+    other_agent_type: str = "sp"
+    layout_name: str = "simple"
 
     # Network
     num_filters: int = 25
-    hidden_dim: int = 64
+    hidden_dim: int = 32
     num_actions: int = 6
