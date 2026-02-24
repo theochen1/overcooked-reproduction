@@ -30,9 +30,8 @@ Usage:
         --agent_dir_hp ppo_hp_agent \\
         --output_file paper_results.json
 
-By default this prefers canonical run-registry loading from DATA_DIR/ppo_runs.
-Legacy results/* scanning is retained as a fallback, or can be forced first via
---disable_run_registry.
+By default this uses strict canonical run-registry loading from DATA_DIR/ppo_runs.
+Legacy results/* scanning is available only when --paper_strict is disabled.
 """
 
 import argparse
@@ -302,6 +301,7 @@ def evaluate_paper_config(
     run_name_templates: Optional[Dict[str, str]] = None,
     agent_dirs: Optional[Dict[str, str]] = None,
     prefer_run_registry: bool = True,
+    strict: bool = True,
 ) -> Dict[str, Any]:
     """
     Evaluate a single paper configuration.
@@ -353,6 +353,7 @@ def evaluate_paper_config(
         agent_index: int,
         source_split: Optional[str],
         agent_slot: int,
+        strict: bool,
     ):
         run_template = run_name_templates.get(source)
         run_agent_name = agent_dirs.get(source)
@@ -360,6 +361,11 @@ def evaluate_paper_config(
             run_template = run_template or "pbt_{layout}"
             run_agent_name = run_agent_name or "pbt_agent"
         checkpoint = None
+        if strict and seed is None:
+            raise ValueError(
+                "Strict paper evaluation requires an explicit seed so checkpoint "
+                "resolution is deterministic."
+            )
         if prefer_run_registry and run_template and run_agent_name and seed is not None:
             checkpoint = find_checkpoint_from_run(
                 ppo_data_dir=ppo_data_dir,
@@ -368,31 +374,42 @@ def evaluate_paper_config(
                 seed=seed,
                 agent_name=run_agent_name,
             )
+            if strict and checkpoint is None and source in {"ppo_sp", "ppo_bc", "ppo_hp", "pbt"}:
+                run_name = format_run_template(run_template, layout)
+                raise FileNotFoundError(
+                    "Strict paper evaluation could not resolve checkpoint from run registry "
+                    f"for source={source}, run={run_name}, seed={seed}, agent={run_agent_name}"
+                )
+
+        def _fallback_checkpoint(base_dir: str) -> Optional[str]:
+            if strict:
+                return None
+            return find_checkpoint(base_dir, layout, seed)
 
         if source == "ppo_sp":
             if checkpoint is None:
-                checkpoint = find_checkpoint(ppo_sp_dir, layout, seed)
+                checkpoint = _fallback_checkpoint(ppo_sp_dir)
             if checkpoint is None:
                 raise FileNotFoundError(f"No PPO_SP checkpoint found for {layout}")
             return load_jax_agent(checkpoint, env_layout, agent_index)
         
         elif source == "ppo_bc":
             if checkpoint is None:
-                checkpoint = find_checkpoint(ppo_bc_dir, layout, seed)
+                checkpoint = _fallback_checkpoint(ppo_bc_dir)
             if checkpoint is None:
                 raise FileNotFoundError(f"No PPO_BC checkpoint found for {layout}")
             return load_jax_agent(checkpoint, env_layout, agent_index)
         
         elif source == "ppo_hp":
             if checkpoint is None:
-                checkpoint = find_checkpoint(ppo_hp_dir, layout, seed)
+                checkpoint = _fallback_checkpoint(ppo_hp_dir)
             if checkpoint is None:
                 raise FileNotFoundError(f"No PPO_HP checkpoint found for {layout}")
             return load_jax_agent(checkpoint, env_layout, agent_index)
         
         elif source == "pbt":
             if checkpoint is None:
-                checkpoint = find_checkpoint(pbt_dir, layout, seed)
+                checkpoint = _fallback_checkpoint(pbt_dir)
             if checkpoint is None:
                 raise FileNotFoundError(f"No PBT checkpoint found for {layout}")
             return load_jax_agent(checkpoint, env_layout, agent_index)
@@ -444,6 +461,7 @@ def evaluate_paper_config(
         idx_0,
         config.get("agent_0_source_split"),
         0,
+        strict,
     )
     agent_1 = load_agent(
         config["agent_1_type"],
@@ -451,6 +469,7 @@ def evaluate_paper_config(
         idx_1,
         config.get("agent_1_source_split"),
         1,
+        strict,
     )
     
     return evaluate_agent_pair(agent_0, agent_1, env_layout, num_games)
@@ -470,6 +489,7 @@ def evaluate_figure_4a(
     run_name_templates: Optional[Dict[str, str]] = None,
     agent_dirs: Optional[Dict[str, str]] = None,
     prefer_run_registry: bool = True,
+    strict: bool = True,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """
     Run Figure 4(a) evaluations (Self-Play comparison).
@@ -512,6 +532,7 @@ def evaluate_figure_4a(
         run_name_templates=run_name_templates,
         agent_dirs=agent_dirs,
         prefer_run_registry=prefer_run_registry,
+        strict=strict,
     )
 
 
@@ -529,6 +550,7 @@ def evaluate_figure_4b(
     run_name_templates: Optional[Dict[str, str]] = None,
     agent_dirs: Optional[Dict[str, str]] = None,
     prefer_run_registry: bool = True,
+    strict: bool = True,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """
     Run Figure 4(b) evaluations (PBT comparison).
@@ -571,6 +593,7 @@ def evaluate_figure_4b(
         run_name_templates=run_name_templates,
         agent_dirs=agent_dirs,
         prefer_run_registry=prefer_run_registry,
+        strict=strict,
     )
 
 
@@ -590,6 +613,7 @@ def evaluate_gail_comparison(
     run_name_templates: Optional[Dict[str, str]] = None,
     agent_dirs: Optional[Dict[str, str]] = None,
     prefer_run_registry: bool = True,
+    strict: bool = True,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """
     Run GAIL comparison evaluations.
@@ -650,6 +674,7 @@ def evaluate_gail_comparison(
         run_name_templates=run_name_templates,
         agent_dirs=agent_dirs,
         prefer_run_registry=prefer_run_registry,
+        strict=strict,
     )
 
 
@@ -673,6 +698,7 @@ def _run_evaluations(
     run_name_templates: Optional[Dict[str, str]] = None,
     agent_dirs: Optional[Dict[str, str]] = None,
     prefer_run_registry: bool = True,
+    strict: bool = True,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """Internal helper to run evaluations."""
     all_results = {}
@@ -714,6 +740,7 @@ def _run_evaluations(
                             run_name_templates=run_name_templates,
                             agent_dirs=agent_dirs,
                             prefer_run_registry=prefer_run_registry,
+                            strict=strict,
                         )
                         config_results[f"order_{order}"].append(result)
                         
@@ -773,6 +800,7 @@ def evaluate_all_paper_experiments(
     run_name_templates: Optional[Dict[str, str]] = None,
     agent_dirs: Optional[Dict[str, str]] = None,
     prefer_run_registry: bool = True,
+    strict: bool = True,
 ) -> Dict[str, Any]:
     """
     Run all paper evaluations for Figure 4(a), 4(b), and GAIL comparison.
@@ -797,6 +825,7 @@ def evaluate_all_paper_experiments(
         run_name_templates=run_name_templates,
         agent_dirs=agent_dirs,
         prefer_run_registry=prefer_run_registry,
+        strict=strict,
     )
     
     # Figure 4(b) - PBT comparison
@@ -814,6 +843,7 @@ def evaluate_all_paper_experiments(
         run_name_templates=run_name_templates,
         agent_dirs=agent_dirs,
         prefer_run_registry=prefer_run_registry,
+        strict=strict,
     )
     
     # GAIL comparison (fair partner-model ablation)
@@ -833,6 +863,7 @@ def evaluate_all_paper_experiments(
         run_name_templates=run_name_templates,
         agent_dirs=agent_dirs,
         prefer_run_registry=prefer_run_registry,
+        strict=strict,
     )
     
     # Add config metadata for plotting
@@ -1016,6 +1047,19 @@ def main():
         action="store_true",
         help="Disable deterministic run_name/seed loading and use legacy directory scans first"
     )
+    parser.add_argument(
+        "--paper_strict",
+        dest="paper_strict",
+        action="store_true",
+        default=True,
+        help="Require strict run-registry resolution for paper checkpoints"
+    )
+    parser.add_argument(
+        "--no_paper_strict",
+        dest="paper_strict",
+        action="store_false",
+        help="Allow legacy fallback checkpoint scans"
+    )
     
     parser.add_argument(
         "--output_file",
@@ -1095,6 +1139,7 @@ def main():
             run_name_templates=run_name_templates,
             agent_dirs=agent_dirs,
             prefer_run_registry=prefer_run_registry,
+            strict=args.paper_strict,
         )
     elif args.figure == "4a":
         results = {
@@ -1112,6 +1157,7 @@ def main():
                 run_name_templates=run_name_templates,
                 agent_dirs=agent_dirs,
                 prefer_run_registry=prefer_run_registry,
+                strict=args.paper_strict,
             )
         }
     elif args.figure == "4b":
@@ -1130,6 +1176,7 @@ def main():
                 run_name_templates=run_name_templates,
                 agent_dirs=agent_dirs,
                 prefer_run_registry=prefer_run_registry,
+                strict=args.paper_strict,
             )
         }
     elif args.figure == "gail":
@@ -1150,6 +1197,7 @@ def main():
                 run_name_templates=run_name_templates,
                 agent_dirs=agent_dirs,
                 prefer_run_registry=prefer_run_registry,
+                strict=args.paper_strict,
             )
         }
     

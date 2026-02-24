@@ -139,6 +139,54 @@ class PPOConfig:
     num_workers: int = 30
 
 
+def assert_paper_parity(config: PPOConfig) -> None:
+    """Enforce canonical paper hyperparameter parity for strict entrypoints."""
+    from human_aware_rl.ppo.configs.paper_configs import (
+        LAYOUT_TO_ENV,
+        get_ppo_bc_config,
+        get_ppo_sp_config,
+    )
+
+    env_to_paper_layout = {env_name: paper_name for paper_name, env_name in LAYOUT_TO_ENV.items()}
+    paper_layout = env_to_paper_layout.get(config.layout_name, config.layout_name)
+
+    # PPO_SP has no partner model; PPO_BC/PPO_HP use the partner-conditioned config.
+    if config.bc_model_dir is None:
+        expected = get_ppo_sp_config(layout=paper_layout, seed=config.seed)
+        source = "ppo_sp"
+    else:
+        expected = get_ppo_bc_config(layout=paper_layout, seed=config.seed, bc_model_dir=config.bc_model_dir)
+        source = "ppo_bc_or_ppo_hp"
+
+    checks: List[Tuple[str, Any, Any]] = [
+        ("old_dynamics", config.old_dynamics, expected["old_dynamics"]),
+        ("clip_eps", config.clip_eps, expected["clip_eps"]),
+        ("gae_lambda", config.gae_lambda, expected["gae_lambda"]),
+        ("ent_coef", config.ent_coef, expected["entropy_coeff_start"]),
+        ("entropy_coeff_start", config.entropy_coeff_start, expected["entropy_coeff_start"]),
+        ("entropy_coeff_end", config.entropy_coeff_end, expected["entropy_coeff_end"]),
+        ("use_entropy_annealing", config.use_entropy_annealing, expected["use_entropy_annealing"]),
+        ("num_minibatches", config.num_minibatches, expected["num_minibatches"]),
+        ("horizon", config.horizon, expected["horizon"]),
+        ("num_envs", config.num_envs, expected["num_workers"]),
+        ("reward_shaping_horizon", config.reward_shaping_horizon, expected["reward_shaping_horizon"]),
+        ("cliprange_schedule", config.cliprange_schedule, expected["cliprange_schedule"]),
+        ("use_legacy_encoding", config.use_legacy_encoding, expected["use_legacy_encoding"]),
+    ]
+
+    mismatches = [
+        f"{field}: got {got!r}, expected {want!r}"
+        for field, got, want in checks
+        if got != want
+    ]
+    if mismatches:
+        raise ValueError(
+            "canonical_paper_entrypoint=True requires strict paper parity; found mismatches "
+            f"for source={source}, layout={paper_layout}, seed={config.seed}:\n- "
+            + "\n- ".join(mismatches)
+        )
+
+
 class Transition(NamedTuple):
     """A single transition from environment interaction."""
     done: jnp.ndarray
@@ -337,7 +385,9 @@ class PPOTrainer:
         # Also set numpy seed for any numpy-based randomness
         np.random.seed(config.seed)
 
-        if self.config.verbose and not self.config.canonical_paper_entrypoint:
+        if self.config.canonical_paper_entrypoint:
+            assert_paper_parity(self.config)
+        elif self.config.verbose:
             print(
                 "[WARN] Direct PPOTrainer usage detected. "
                 "Paper-parity guarantees are only provided via train_paper_reproduction.py + paper_configs.py."

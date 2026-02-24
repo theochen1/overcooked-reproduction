@@ -190,8 +190,8 @@ def train_ppo_hp(
         bc_schedule_tuples = [(int(bc_schedule[i]), float(bc_schedule[i+1])) 
                              for i in range(0, len(bc_schedule), 2)]
     
-    # Create PPO config
-    num_envs = min(config_dict.get("num_workers", 32), 32)
+    # Create PPO config (mirror PPO_BC paper config wiring; only partner model differs)
+    num_envs = config_dict.get("num_workers", 30)
     
     ppo_config = PPOConfig(
         layout_name=config_dict["layout_name"],
@@ -203,6 +203,9 @@ def train_ppo_hp(
         gamma=config_dict["gamma"],
         gae_lambda=config_dict["gae_lambda"],
         clip_eps=config_dict["clip_eps"],
+        clip_eps_end=config_dict.get("clip_eps_end", 0.0),
+        clip_end_fraction=config_dict.get("clip_end_fraction", 1.0),
+        cliprange_schedule=config_dict.get("cliprange_schedule", "constant"),
         vf_coef=config_dict["vf_coef"],
         max_grad_norm=config_dict["max_grad_norm"],
         num_minibatches=config_dict.get("num_minibatches", 10),
@@ -215,14 +218,20 @@ def train_ppo_hp(
         reward_shaping_factor=config_dict.get("reward_shaping_factor", 1.0),
         reward_shaping_horizon=config_dict.get("reward_shaping_horizon", float('inf')),
         use_phi=config_dict.get("use_phi", False),
-        entropy_coeff_start=config_dict.get("entropy_coeff_start", 0.2),
+        use_legacy_encoding=config_dict.get("use_legacy_encoding", False),
+        old_dynamics=config_dict.get("old_dynamics", True),
+        ent_coef=config_dict.get("entropy_coeff_start", 0.1),
+        entropy_coeff_start=config_dict.get("entropy_coeff_start", 0.1),
         entropy_coeff_end=config_dict.get("entropy_coeff_end", 0.1),
-        entropy_coeff_horizon=config_dict.get("entropy_coeff_horizon", 3e5),
-        use_entropy_annealing=True,
+        entropy_coeff_horizon=config_dict.get("entropy_coeff_horizon", 0),
+        use_entropy_annealing=config_dict.get("use_entropy_annealing", False),
+        use_lr_annealing=config_dict.get("use_lr_annealing", True),
+        lr_annealing_factor=config_dict.get("lr_annealing_factor", 1.0),
         num_epochs=config_dict.get("num_sgd_iter", 8),
         log_interval=config_dict.get("log_interval", 1),
         save_interval=config_dict.get("save_interval", 50),
-        eval_interval=config_dict.get("eval_interval", 25),
+        eval_interval=config_dict.get("evaluation_interval", config_dict.get("eval_interval", 25)),
+        eval_num_games=config_dict.get("evaluation_num_games", 5),
         early_stop_patience=config_dict.get("early_stop_patience", 100),
         bc_schedule=bc_schedule_tuples,
         bc_model_dir=hp_model_dir,  # Use HP model

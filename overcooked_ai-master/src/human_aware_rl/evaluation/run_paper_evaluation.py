@@ -6,9 +6,8 @@ This script provides a complete pipeline to:
 2. Run all Figure 4 evaluations
 3. Generate paper-style figures
 
-Availability checks and evaluations prefer canonical run-registry paths under
-DATA_DIR/ppo_runs. Legacy results/* directories are kept as fallback for
-backward compatibility.
+Availability checks and evaluations default to strict canonical run-registry
+paths under DATA_DIR/ppo_runs.
 
 Usage:
     # Full evaluation (requires all models trained)
@@ -65,6 +64,7 @@ def _has_checkpoint_for_layout(
     dirs: Dict[str, str],
     run_name_templates: Dict[str, str],
     agent_dirs: Dict[str, str],
+    paper_strict: bool = True,
 ) -> bool:
     # Canonical ppo_runs path first
     run_template = run_name_templates.get(model_type)
@@ -76,7 +76,10 @@ def _has_checkpoint_for_layout(
         if _has_checkpoint_under_agent_dir(agent_dir):
             return True
 
-    # Legacy fallback: scan base directory
+    if paper_strict:
+        return False
+
+    # Legacy fallback: scan base directory (non-strict mode only)
     base_dir = dirs.get(model_type, "")
     if not os.path.isdir(base_dir):
         return False
@@ -96,6 +99,7 @@ def check_model_availability(
     dirs: Dict[str, str] = None,
     run_name_templates: Dict[str, str] = None,
     agent_dirs: Dict[str, str] = None,
+    paper_strict: bool = True,
     verbose: bool = True,
 ) -> Dict[str, Dict[str, bool]]:
     """
@@ -147,6 +151,7 @@ def check_model_availability(
                     dirs=dirs,
                     run_name_templates=run_name_templates,
                     agent_dirs=agent_dirs,
+                    paper_strict=paper_strict,
                 )
                 for seed in seeds
             )
@@ -217,6 +222,7 @@ def run_evaluation(
     agent_dirs: Dict[str, str] = None,
     num_games: int = 10,
     output_file: str = "paper_results.json",
+    paper_strict: bool = True,
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -273,6 +279,7 @@ def run_evaluation(
             run_name_templates=run_name_templates,
             agent_dirs=agent_dirs,
             prefer_run_registry=True,
+            strict=paper_strict,
         )
     
     if figure in ["all", "4b"]:
@@ -295,6 +302,7 @@ def run_evaluation(
             run_name_templates=run_name_templates,
             agent_dirs=agent_dirs,
             prefer_run_registry=True,
+            strict=paper_strict,
         )
     
     # Save results
@@ -424,6 +432,19 @@ def main():
         default=10,
         help="Number of games per evaluation"
     )
+    parser.add_argument(
+        "--paper_strict",
+        dest="paper_strict",
+        action="store_true",
+        default=True,
+        help="Require strict run-registry checkpoint resolution (no legacy scans)"
+    )
+    parser.add_argument(
+        "--no_paper_strict",
+        dest="paper_strict",
+        action="store_false",
+        help="Allow legacy fallback checkpoint scans"
+    )
     
     # Directory overrides
     parser.add_argument("--ppo_data_dir", type=str, default=DEFAULT_DIRS["ppo_data_dir"])
@@ -436,9 +457,11 @@ def main():
     parser.add_argument("--run_name_sp", type=str, default=DEFAULT_RUN_NAME_TEMPLATES["ppo_sp"])
     parser.add_argument("--run_name_bc", type=str, default=DEFAULT_RUN_NAME_TEMPLATES["ppo_bc"])
     parser.add_argument("--run_name_hp", type=str, default=DEFAULT_RUN_NAME_TEMPLATES["ppo_hp"])
+    parser.add_argument("--run_name_pbt", type=str, default="pbt_{layout}")
     parser.add_argument("--agent_dir_sp", type=str, default=DEFAULT_AGENT_DIRS["ppo_sp"])
     parser.add_argument("--agent_dir_bc", type=str, default=DEFAULT_AGENT_DIRS["ppo_bc"])
     parser.add_argument("--agent_dir_hp", type=str, default=DEFAULT_AGENT_DIRS["ppo_hp"])
+    parser.add_argument("--agent_dir_pbt", type=str, default="pbt_agent")
     
     parser.add_argument(
         "--quiet",
@@ -465,11 +488,13 @@ def main():
         "ppo_sp": args.run_name_sp,
         "ppo_bc": args.run_name_bc,
         "ppo_hp": args.run_name_hp,
+        "pbt": args.run_name_pbt,
     }
     agent_dirs = {
         "ppo_sp": args.agent_dir_sp,
         "ppo_bc": args.agent_dir_bc,
         "ppo_hp": args.agent_dir_hp,
+        "pbt": args.agent_dir_pbt,
     }
     
     # Check model availability
@@ -479,6 +504,7 @@ def main():
         dirs=dirs,
         run_name_templates=run_name_templates,
         agent_dirs=agent_dirs,
+        paper_strict=args.paper_strict,
         verbose=verbose,
     )
     
@@ -505,6 +531,7 @@ def main():
             agent_dirs=agent_dirs,
             num_games=args.num_games,
             output_file=args.results_file,
+            paper_strict=args.paper_strict,
             verbose=verbose,
         )
         

@@ -16,10 +16,24 @@ except ImportError:
     plot_training_curves = None
     set_paper_style = None
 
+try:
+    from human_aware_rl.visualization.plot_paper_figures import (
+        plot_figure_5,
+        plot_figure_6,
+        plot_figure_7,
+    )
+except ImportError:
+    plot_figure_5 = None
+    plot_figure_6 = None
+    plot_figure_7 = None
+
 __all__ = [
     "plot_paper_results",
     "plot_training_curves",
     "set_paper_style",
+    "plot_figure_5",
+    "plot_figure_6",
+    "plot_figure_7",
     "PLOTTING_AVAILABLE",
 ]
 
