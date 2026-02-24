@@ -3,16 +3,8 @@
 import argparse
 
 from human_aware_rl_jax_lift.agents.ppo.config import PPOConfig
+from human_aware_rl_jax_lift.reproducibility.paper_hparams import get_hparams
 from human_aware_rl_jax_lift.training.ppo_run import ppo_run
-
-SP_LAYOUT_DEFAULTS = {
-    # Paper Table 2 (PPOSP)
-    "simple": {"learning_rate": 1e-3, "vf_coef": 0.5},
-    "unident_s": {"learning_rate": 1e-3, "vf_coef": 0.5},
-    "random1": {"learning_rate": 6e-4, "vf_coef": 0.5},
-    "random0": {"learning_rate": 8e-4, "vf_coef": 0.5},
-    "random3": {"learning_rate": 8e-4, "vf_coef": 0.5},
-}
 
 
 def main() -> None:
@@ -20,16 +12,17 @@ def main() -> None:
     parser.add_argument("--layout", type=str, required=True)
     parser.add_argument("--seeds", type=int, nargs="+", required=True)
     parser.add_argument("--save_dir", type=str, default="data/ppo_runs")
-    parser.add_argument("--total_timesteps", type=int, default=int(5e6))
+    parser.add_argument("--total_timesteps", type=int, default=None)
     args = parser.parse_args()
 
-    overrides = SP_LAYOUT_DEFAULTS.get(args.layout, {})
+    overrides = get_hparams("ppo_sp", args.layout)
     cfg = PPOConfig(
-        total_timesteps=args.total_timesteps,
+        total_timesteps=int(6e6 if args.total_timesteps is None else args.total_timesteps),
         layout_name=args.layout,
         other_agent_type="sp",
-        learning_rate=float(overrides.get("learning_rate", 1e-3)),
-        vf_coef=float(overrides.get("vf_coef", 0.5)),
+        learning_rate=float(overrides["learning_rate"]),
+        vf_coef=float(overrides["vf_coef"]),
+        rew_shaping_horizon=int(overrides["rew_shaping_horizon"]),
     )
     run_name = f"ppo_sp_{args.layout}"
     summaries = ppo_run(
