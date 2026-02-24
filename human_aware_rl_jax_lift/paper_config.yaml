@@ -51,11 +51,11 @@ ppo_sp_layout_overrides:
   random3:   {learning_rate: 8.0e-4, value_coef: 0.5}
 
 ppo_bc_layout_overrides:
-  simple:    {learning_rate: 1.0e-3, lr_annealing: 3.0, value_coef: 0.5, rew_shaping_horizon: 1000000,  self_play_horizon: [500000,  3000000]}
-  unident_s: {learning_rate: 1.0e-3, lr_annealing: 3.0, value_coef: 0.5, rew_shaping_horizon: 6000000,  self_play_horizon: [1000000, 7000000]}
-  random1:   {learning_rate: 1.0e-3, lr_annealing: 1.5, value_coef: 0.5, rew_shaping_horizon: 5000000,  self_play_horizon: [2000000, 6000000]}
-  random0:   {learning_rate: 1.5e-3, lr_annealing: 2.0, value_coef: 0.1, rew_shaping_horizon: 4000000,  self_play_horizon: null}
-  random3:   {learning_rate: 1.5e-3, lr_annealing: 3.0, value_coef: 0.1, rew_shaping_horizon: 4000000,  self_play_horizon: [1000000, 4000000]}
+  simple:    {learning_rate: 1.0e-3, lr_annealing: 3.0, value_coef: 0.5, num_minibatches: 10, rew_shaping_horizon: 1000000,  self_play_horizon: [500000,  3000000]}
+  unident_s: {learning_rate: 1.0e-3, lr_annealing: 3.0, value_coef: 0.5, num_minibatches: 12, rew_shaping_horizon: 6000000,  self_play_horizon: [1000000, 7000000]}
+  random1:   {learning_rate: 1.0e-3, lr_annealing: 1.5, value_coef: 0.5, num_minibatches: 15, rew_shaping_horizon: 5000000,  self_play_horizon: [2000000, 6000000]}
+  random0:   {learning_rate: 1.5e-3, lr_annealing: 2.0, value_coef: 0.1, num_minibatches: 15, rew_shaping_horizon: 4000000,  self_play_horizon: null}
+  random3:   {learning_rate: 1.5e-3, lr_annealing: 3.0, value_coef: 0.1, num_minibatches: 15, rew_shaping_horizon: 4000000,  self_play_horizon: [1000000, 4000000]}
 
 pbt_defaults:
   num_envs: 50

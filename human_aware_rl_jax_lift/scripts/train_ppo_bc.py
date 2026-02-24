@@ -43,6 +43,7 @@ def main() -> None:
         learning_rate=float(overrides["learning_rate"]),
         lr_annealing=float(overrides["lr_annealing"]),
         vf_coef=float(overrides["vf_coef"]),
+        num_minibatches=int(overrides["num_minibatches"]),
         rew_shaping_horizon=int(overrides["rew_shaping_horizon"]),
         self_play_horizon=self_play_horizon,
     )

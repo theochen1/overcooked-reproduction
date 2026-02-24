@@ -82,9 +82,15 @@ def _train_single_seed(
     epochs: int,
     lr: float,
     adam_eps: float,
+    batch_size: int,
 ) -> dict:
     rng = set_global_seed(int(seed))
-    cfg = BCTrainConfig(num_epochs=int(epochs), learning_rate=float(lr), adam_eps=float(adam_eps), batch_size=256)
+    cfg = BCTrainConfig(
+        num_epochs=int(epochs),
+        learning_rate=float(lr),
+        adam_eps=float(adam_eps),
+        batch_size=int(batch_size),
+    )
     out = train_bc(
         features=jnp.asarray(features, dtype=jnp.float32),
         labels=jnp.asarray(actions, dtype=jnp.int32),
@@ -116,6 +122,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--adam_eps", type=float, default=1e-8)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_train_trajs", type=int, default=None)
     parser.add_argument("--split_seed", type=int, default=0)
     parser.add_argument("--save_dir", type=str, default="data/bc_runs")
@@ -150,6 +157,7 @@ def main() -> None:
             epochs=args.epochs,
             lr=args.lr,
             adam_eps=args.adam_eps,
+            batch_size=args.batch_size,
         )
         summaries.append(summary)
         if summary["train_accuracy"] > best_acc:

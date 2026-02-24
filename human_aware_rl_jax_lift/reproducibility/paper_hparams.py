@@ -1,6 +1,7 @@
 """Paper-locked hyperparameters keyed by algorithm and layout."""
 
 from copy import deepcopy
+from typing import Optional
 
 
 PAPER_LAYOUTS = ("simple", "unident_s", "random1", "random0", "random3")
@@ -41,6 +42,7 @@ _PPO_BC = {
         "learning_rate": 1e-3,
         "lr_annealing": 3.0,
         "vf_coef": 0.5,
+        "num_minibatches": 10,
         "rew_shaping_horizon": int(1e6),
         "self_play_horizon": (int(5e5), int(3e6)),
     },
@@ -48,6 +50,7 @@ _PPO_BC = {
         "learning_rate": 1e-3,
         "lr_annealing": 3.0,
         "vf_coef": 0.5,
+        "num_minibatches": 12,
         "rew_shaping_horizon": int(6e6),
         "self_play_horizon": (int(1e6), int(7e6)),
     },
@@ -55,6 +58,7 @@ _PPO_BC = {
         "learning_rate": 1e-3,
         "lr_annealing": 1.5,
         "vf_coef": 0.5,
+        "num_minibatches": 15,
         "rew_shaping_horizon": int(5e6),
         "self_play_horizon": (int(2e6), int(6e6)),
     },
@@ -62,6 +66,7 @@ _PPO_BC = {
         "learning_rate": 1.5e-3,
         "lr_annealing": 2.0,
         "vf_coef": 0.1,
+        "num_minibatches": 15,
         "rew_shaping_horizon": int(4e6),
         "self_play_horizon": None,
     },
@@ -69,6 +74,7 @@ _PPO_BC = {
         "learning_rate": 1.5e-3,
         "lr_annealing": 3.0,
         "vf_coef": 0.1,
+        "num_minibatches": 15,
         "rew_shaping_horizon": int(4e6),
         "self_play_horizon": (int(1e6), int(4e6)),
     },
@@ -93,7 +99,7 @@ _BC = {
 }
 
 
-def get_hparams(alg: str, layout: str | None = None) -> dict:
+def get_hparams(alg: str, layout: Optional[str] = None) -> dict:
     """Get paper-locked hyperparameters by algorithm and optional layout."""
     if alg == "ppo_sp":
         if layout not in _PPO_SP:
