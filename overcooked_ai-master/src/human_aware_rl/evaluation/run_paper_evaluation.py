@@ -1,13 +1,17 @@
 """
-Unified Paper Evaluation Pipeline for Overcooked AI.
+Figure 4 Evaluation Pipeline for Overcooked AI.
 
-This script provides a complete pipeline to:
+This script provides a complete Figure 4 pipeline to:
 1. Check all required models exist
 2. Run all Figure 4 evaluations
-3. Generate paper-style figures
+3. Generate Figure 4-style plots
 
 Availability checks and evaluations default to strict canonical run-registry
 paths under DATA_DIR/ppo_runs.
+
+Note:
+    For full Figure 4-7 orchestration, use:
+    python -m human_aware_rl.reproduce.paper_reproduce
 
 Usage:
     # Full evaluation (requires all models trained)
@@ -26,8 +30,10 @@ Usage:
 import argparse
 import json
 import os
+import subprocess
 import sys
-from typing import Dict, List, Optional, Any
+import time
+from typing import Dict, List, Optional, Any, Tuple
 
 from human_aware_rl.ppo.configs.paper_configs import PAPER_LAYOUTS
 from human_aware_rl.imitation.behavior_cloning import BC_SAVE_DIR
@@ -144,6 +150,39 @@ def _missing_layout_seed_pairs(
     return missing
 
 
+def _git_sha() -> Optional[str]:
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        )
+        return out.decode("utf-8").strip()
+    except Exception:
+        return None
+
+
+def _write_provenance_header(
+    *,
+    output_path: str,
+    args: argparse.Namespace,
+    dirs: Dict[str, str],
+    paper_strict: bool,
+) -> None:
+    payload = {
+        "timestamp_unix": int(time.time()),
+        "git_sha": _git_sha(),
+        "paper_strict": paper_strict,
+        "cli_args": vars(args),
+        "roots": {
+            "ppo_data_dir": dirs.get("ppo_data_dir"),
+            "bc_dir": dirs.get("bc"),
+            "hp_dir": dirs.get("hp"),
+        },
+    }
+    with open(output_path, "w") as f:
+        json.dump(payload, f, indent=2, sort_keys=True)
+
+
 def train_missing_models(
     *,
     layouts: List[str],
@@ -153,7 +192,7 @@ def train_missing_models(
     agent_dirs: Dict[str, str],
     paper_strict: bool = True,
     verbose: bool = True,
-) -> None:
+) -> Dict[str, Any]:
     """
     Train missing canonical artifacts for Figure-4 reproduction.
 
@@ -195,10 +234,27 @@ def train_missing_models(
         agent_dirs=agent_dirs,
     )
 
+    report: Dict[str, Any] = {
+        "missing_before": {
+            "bc_layouts": sorted(missing_bc),
+            "hp_layouts": sorted(missing_hp),
+            "ppo_sp_pairs": [(layout, seed) for layout in sorted(missing_sp) for seed in missing_sp[layout]],
+            "ppo_bc_pairs": [(layout, seed) for layout in sorted(missing_bc_ppo) for seed in missing_bc_ppo[layout]],
+            "ppo_hp_pairs": [(layout, seed) for layout in sorted(missing_hp_ppo) for seed in missing_hp_ppo[layout]],
+        },
+        "trained": {
+            "bc_layouts": [],
+            "hp_layouts": [],
+            "ppo_sp_pairs": [],
+            "ppo_bc_pairs": [],
+            "ppo_hp_pairs": [],
+        },
+    }
+
     if not any([missing_bc, missing_hp, missing_sp, missing_bc_ppo, missing_hp_ppo]):
         if verbose:
             print("No missing canonical BC/HP/PPO artifacts detected.")
-        return
+        return report
 
     if verbose:
         print("\n" + "=" * 70)
@@ -216,6 +272,7 @@ def train_missing_models(
             verbose=verbose,
             evaluate=False,
         )
+        report["trained"]["bc_layouts"] = sorted(missing_bc)
 
     if missing_hp:
         if verbose:
@@ -228,59 +285,62 @@ def train_missing_models(
             verbose=verbose,
             evaluate=False,
         )
+        report["trained"]["hp_layouts"] = sorted(missing_hp)
 
-    def _train_missing_ppo(
-        model_type: str,
-        missing: Dict[str, List[int]],
-    ) -> None:
-        if not missing:
-            return
-        layouts_to_train = sorted(missing.keys())
-        seeds_to_train: List[int] = sorted({seed for seed_list in missing.values() for seed in seed_list})
-        if verbose:
-            print(f"Training missing {model_type.upper()} models for layouts={layouts_to_train}, seeds={seeds_to_train}")
-            if any(set(seed_list) != set(seeds_to_train) for seed_list in missing.values()):
-                print(
-                    f"  Note: {model_type} has partial layout/seed gaps; training uses "
-                    "layout × union(seeds) to fill missing checkpoints."
-                )
-        if model_type == "ppo_sp":
-            from human_aware_rl.ppo.train_ppo_sp import train_all_layouts as train_ppo_layouts
-            train_ppo_layouts(
-                seeds=seeds_to_train,
-                layouts=layouts_to_train,
+    def _iter_pairs(missing: Dict[str, List[int]]) -> List[Tuple[str, int]]:
+        return [(layout, seed) for layout in sorted(missing) for seed in sorted(missing[layout])]
+
+    sp_pairs = _iter_pairs(missing_sp)
+    bc_pairs = _iter_pairs(missing_bc_ppo)
+    hp_pairs = _iter_pairs(missing_hp_ppo)
+
+    if sp_pairs:
+        from human_aware_rl.ppo.train_ppo_sp import train_ppo_sp
+        for layout, seed in sp_pairs:
+            if verbose:
+                print(f"Training missing PPO_SP pair: layout={layout}, seed={seed}")
+            train_ppo_sp(
+                layout=layout,
+                seed=seed,
                 ppo_data_dir=dirs["ppo_data_dir"],
                 agent_name=agent_dirs["ppo_sp"],
                 verbose=verbose,
                 canonical_paper_entrypoint=True,
             )
-        elif model_type == "ppo_bc":
-            from human_aware_rl.ppo.train_ppo_bc import train_all_layouts as train_ppo_layouts
-            train_ppo_layouts(
-                seeds=seeds_to_train,
-                layouts=layouts_to_train,
+            report["trained"]["ppo_sp_pairs"].append((layout, seed))
+
+    if bc_pairs:
+        from human_aware_rl.ppo.train_ppo_bc import train_ppo_bc
+        for layout, seed in bc_pairs:
+            if verbose:
+                print(f"Training missing PPO_BC pair: layout={layout}, seed={seed}")
+            train_ppo_bc(
+                layout=layout,
+                seed=seed,
                 ppo_data_dir=dirs["ppo_data_dir"],
                 partner_type="bc_train",
                 agent_name=agent_dirs["ppo_bc"],
                 verbose=verbose,
                 canonical_paper_entrypoint=True,
             )
-        elif model_type == "ppo_hp":
-            from human_aware_rl.ppo.train_ppo_hp import train_all_layouts as train_ppo_layouts
-            train_ppo_layouts(
-                seeds=seeds_to_train,
-                layouts=layouts_to_train,
+            report["trained"]["ppo_bc_pairs"].append((layout, seed))
+
+    if hp_pairs:
+        from human_aware_rl.ppo.train_ppo_hp import train_ppo_hp
+        for layout, seed in hp_pairs:
+            if verbose:
+                print(f"Training missing PPO_HP pair: layout={layout}, seed={seed}")
+            train_ppo_hp(
+                layout=layout,
+                seed=seed,
                 ppo_data_dir=dirs["ppo_data_dir"],
                 agent_name=agent_dirs["ppo_hp"],
                 verbose=verbose,
                 canonical_paper_entrypoint=True,
             )
-        else:
-            raise ValueError(f"Unsupported model_type for train_missing: {model_type}")
+            report["trained"]["ppo_hp_pairs"].append((layout, seed))
 
-    _train_missing_ppo("ppo_sp", missing_sp)
-    _train_missing_ppo("ppo_bc", missing_bc_ppo)
-    _train_missing_ppo("ppo_hp", missing_hp_ppo)
+    return report
 
 
 def check_model_availability(
@@ -456,9 +516,9 @@ def run_evaluation(
             print("#"*70)
         
         results["figure_4a"] = evaluate_figure_4a(
-            ppo_sp_dir=dirs["ppo_sp"],
-            ppo_bc_dir=dirs["ppo_bc"],
-            ppo_hp_dir=dirs["ppo_hp"],
+            ppo_sp_dir=None if paper_strict else dirs["ppo_sp"],
+            ppo_bc_dir=None if paper_strict else dirs["ppo_bc"],
+            ppo_hp_dir=None if paper_strict else dirs["ppo_hp"],
             bc_dir=dirs["bc"],
             hp_dir=dirs["hp"],
             layouts=layouts,
@@ -479,9 +539,9 @@ def run_evaluation(
             print("#"*70)
         
         results["figure_4b"] = evaluate_figure_4b(
-            ppo_bc_dir=dirs["ppo_bc"],
-            ppo_hp_dir=dirs["ppo_hp"],
-            pbt_dir=dirs["pbt"],
+            ppo_bc_dir=None if paper_strict else dirs["ppo_bc"],
+            ppo_hp_dir=None if paper_strict else dirs["ppo_hp"],
+            pbt_dir=None if paper_strict else dirs["pbt"],
             bc_dir=dirs["bc"],
             hp_dir=dirs["hp"],
             layouts=layouts,
@@ -547,7 +607,7 @@ def generate_figures(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Unified Paper Evaluation Pipeline for Overcooked AI",
+        description="Figure 4 Evaluation Pipeline for Overcooked AI",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     
@@ -555,7 +615,7 @@ def main():
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Run full evaluation pipeline"
+        help="Run full Figure 4 pipeline"
     )
     
     parser.add_argument(
@@ -628,17 +688,41 @@ def main():
         help="Number of games per evaluation"
     )
     parser.add_argument(
-        "--paper_strict",
+        "--strict",
         dest="paper_strict",
         action="store_true",
         default=True,
         help="Require strict run-registry checkpoint resolution (no legacy scans)"
     )
     parser.add_argument(
-        "--no_paper_strict",
+        "--no_strict",
         dest="paper_strict",
         action="store_false",
         help="Allow legacy fallback checkpoint scans"
+    )
+    parser.add_argument(
+        "--paper_strict",
+        dest="paper_strict",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no_paper_strict",
+        dest="paper_strict",
+        action="store_false",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--train_missing_report",
+        type=str,
+        default="trained_missing_report.json",
+        help="Path to write report of missing/trained artifacts"
+    )
+    parser.add_argument(
+        "--provenance_file",
+        type=str,
+        default=None,
+        help="Path for strict-mode provenance metadata JSON (default: <results_file>.provenance.json)"
     )
     
     # Directory overrides
@@ -709,8 +793,25 @@ def main():
             strict_errors.append("agent_dir_hp must match canonical default in --paper_strict mode")
         if agent_dirs["pbt"] != DEFAULT_AGENT_DIRS["pbt"]:
             strict_errors.append("agent_dir_pbt must match canonical default in --paper_strict mode")
+        if args.ppo_sp_dir != DEFAULT_DIRS["ppo_sp"]:
+            strict_errors.append("ppo_sp_dir overrides are disallowed in strict mode")
+        if args.ppo_bc_dir != DEFAULT_DIRS["ppo_bc"]:
+            strict_errors.append("ppo_bc_dir overrides are disallowed in strict mode")
+        if args.ppo_hp_dir != DEFAULT_DIRS["ppo_hp"]:
+            strict_errors.append("ppo_hp_dir overrides are disallowed in strict mode")
+        if args.pbt_dir != DEFAULT_DIRS["pbt"]:
+            strict_errors.append("pbt_dir overrides are disallowed in strict mode")
         if strict_errors:
             parser.error("; ".join(strict_errors))
+        provenance_file = args.provenance_file or f"{args.results_file}.provenance.json"
+        _write_provenance_header(
+            output_path=provenance_file,
+            args=args,
+            dirs=dirs,
+            paper_strict=True,
+        )
+        if verbose:
+            print(f"Strict provenance written to {provenance_file}")
     
     # Check model availability
     availability = check_model_availability(
@@ -724,7 +825,7 @@ def main():
     )
     
     if args.train_missing:
-        train_missing_models(
+        train_report = train_missing_models(
             layouts=layouts or PAPER_LAYOUTS,
             seeds=seeds,
             dirs=dirs,
@@ -733,6 +834,10 @@ def main():
             paper_strict=args.paper_strict,
             verbose=verbose,
         )
+        with open(args.train_missing_report, "w") as f:
+            json.dump(train_report, f, indent=2)
+        if verbose:
+            print(f"Train-missing report written to {args.train_missing_report}")
         availability = check_model_availability(
             layouts=layouts or PAPER_LAYOUTS,
             seeds=seeds,

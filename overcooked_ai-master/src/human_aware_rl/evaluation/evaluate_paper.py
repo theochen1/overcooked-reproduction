@@ -297,10 +297,10 @@ def resolve_bc_root(source_split: Optional[str], bc_dir: str, hp_dir: str) -> st
 def evaluate_paper_config(
     config_name: str,
     layout: str,
-    ppo_sp_dir: str,
-    ppo_bc_dir: str,
-    ppo_hp_dir: str = "results/ppo_hp",
-    pbt_dir: str = "results/pbt",
+    ppo_sp_dir: Optional[str],
+    ppo_bc_dir: Optional[str],
+    ppo_hp_dir: Optional[str] = "results/ppo_hp",
+    pbt_dir: Optional[str] = "results/pbt",
     ppo_gail_dir: str = "results/ppo_gail",
     ppo_gail_opt_dir: str = "results/ppo_gail_opt",
     ppo_sp_opt_dir: str = "results/ppo_sp_opt",
@@ -321,10 +321,10 @@ def evaluate_paper_config(
     Args:
         config_name: Name of evaluation config
         layout: Paper layout name
-        ppo_sp_dir: Directory with PPO self-play checkpoints
-        ppo_bc_dir: Directory with PPO_BC checkpoints
-        ppo_hp_dir: Directory with PPO_HP checkpoints (gold standard)
-        pbt_dir: Directory with PBT checkpoints
+        ppo_sp_dir: Directory with PPO self-play checkpoints (non-strict fallback only)
+        ppo_bc_dir: Directory with PPO_BC checkpoints (non-strict fallback only)
+        ppo_hp_dir: Directory with PPO_HP checkpoints (non-strict fallback only)
+        pbt_dir: Directory with PBT checkpoints (non-strict fallback only)
         ppo_gail_dir: Directory with PPO_GAIL (controlled) checkpoints
         ppo_gail_opt_dir: Directory with PPO_GAIL (optimized) checkpoints
         ppo_sp_opt_dir: Directory with PPO_SP (optimized) checkpoints
@@ -418,8 +418,10 @@ def evaluate_paper_config(
                 agent_name=run_agent_name,
             )
 
-        def _fallback_checkpoint(base_dir: str) -> Optional[str]:
+        def _fallback_checkpoint(base_dir: Optional[str]) -> Optional[str]:
             if strict:
+                return None
+            if not base_dir:
                 return None
             return find_checkpoint(base_dir, layout, seed)
 
@@ -513,9 +515,9 @@ def evaluate_paper_config(
 
 
 def evaluate_figure_4a(
-    ppo_sp_dir: str,
-    ppo_bc_dir: str,
-    ppo_hp_dir: str = "results/ppo_hp",
+    ppo_sp_dir: Optional[str],
+    ppo_bc_dir: Optional[str],
+    ppo_hp_dir: Optional[str] = "results/ppo_hp",
     bc_dir: Optional[str] = None,
     hp_dir: Optional[str] = None,
     layouts: Optional[List[str]] = None,
@@ -574,9 +576,9 @@ def evaluate_figure_4a(
 
 
 def evaluate_figure_4b(
-    ppo_bc_dir: str,
-    ppo_hp_dir: str = "results/ppo_hp",
-    pbt_dir: str = "results/pbt",
+    ppo_bc_dir: Optional[str],
+    ppo_hp_dir: Optional[str] = "results/ppo_hp",
+    pbt_dir: Optional[str] = "results/pbt",
     bc_dir: Optional[str] = None,
     hp_dir: Optional[str] = None,
     layouts: Optional[List[str]] = None,
@@ -717,10 +719,10 @@ def evaluate_gail_comparison(
 
 def _run_evaluations(
     configs: List[str],
-    ppo_sp_dir: str,
-    ppo_bc_dir: str,
-    ppo_hp_dir: str,
-    pbt_dir: str,
+    ppo_sp_dir: Optional[str],
+    ppo_bc_dir: Optional[str],
+    ppo_hp_dir: Optional[str],
+    pbt_dir: Optional[str],
     bc_dir: Optional[str],
     hp_dir: Optional[str],
     layouts: List[str],
@@ -820,10 +822,10 @@ def _run_evaluations(
 
 
 def evaluate_all_paper_experiments(
-    ppo_sp_dir: str = "results/ppo_sp",
-    ppo_bc_dir: str = "results/ppo_bc",
-    ppo_hp_dir: str = "results/ppo_hp",
-    pbt_dir: str = "results/pbt",
+    ppo_sp_dir: Optional[str] = "results/ppo_sp",
+    ppo_bc_dir: Optional[str] = "results/ppo_bc",
+    ppo_hp_dir: Optional[str] = "results/ppo_hp",
+    pbt_dir: Optional[str] = "results/pbt",
     ppo_gail_dir: str = "results/ppo_gail",
     ppo_gail_opt_dir: str = "results/ppo_gail_opt",
     ppo_sp_opt_dir: str = "results/ppo_sp_opt",
@@ -1082,13 +1084,13 @@ def main():
     parser.add_argument(
         "--run_name_pbt",
         type=str,
-        default="pbt_{layout}",
+        default=DEFAULT_RUN_NAME_TEMPLATES["pbt"],
         help="Run-name template for PBT (supports {layout})"
     )
     parser.add_argument(
         "--agent_dir_pbt",
         type=str,
-        default="pbt_agent",
+        default=DEFAULT_AGENT_DIRS["pbt"],
         help="Agent subdirectory name for PBT runs"
     )
     parser.add_argument(
@@ -1097,17 +1099,29 @@ def main():
         help="Disable deterministic run_name/seed loading and use legacy directory scans first"
     )
     parser.add_argument(
-        "--paper_strict",
+        "--strict",
         dest="paper_strict",
         action="store_true",
         default=True,
         help="Require strict run-registry resolution for paper checkpoints"
     )
     parser.add_argument(
-        "--no_paper_strict",
+        "--no_strict",
         dest="paper_strict",
         action="store_false",
         help="Allow legacy fallback checkpoint scans"
+    )
+    parser.add_argument(
+        "--paper_strict",
+        dest="paper_strict",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no_paper_strict",
+        dest="paper_strict",
+        action="store_false",
+        help=argparse.SUPPRESS,
     )
     
     parser.add_argument(
@@ -1172,13 +1186,22 @@ def main():
     prefer_run_registry = not args.disable_run_registry
     if args.paper_strict and not prefer_run_registry:
         parser.error("--paper_strict requires run-registry loading; remove --disable_run_registry.")
+    if args.paper_strict:
+        if args.ppo_sp_dir != "results/ppo_sp":
+            parser.error("ppo_sp_dir override is disallowed in strict mode.")
+        if args.ppo_bc_dir != "results/ppo_bc":
+            parser.error("ppo_bc_dir override is disallowed in strict mode.")
+        if args.ppo_hp_dir != "results/ppo_hp":
+            parser.error("ppo_hp_dir override is disallowed in strict mode.")
+        if args.pbt_dir != "results/pbt":
+            parser.error("pbt_dir override is disallowed in strict mode.")
     
     if args.figure == "all":
         results = evaluate_all_paper_experiments(
-            ppo_sp_dir=args.ppo_sp_dir,
-            ppo_bc_dir=args.ppo_bc_dir,
-            ppo_hp_dir=args.ppo_hp_dir,
-            pbt_dir=args.pbt_dir,
+            ppo_sp_dir=None if args.paper_strict else args.ppo_sp_dir,
+            ppo_bc_dir=None if args.paper_strict else args.ppo_bc_dir,
+            ppo_hp_dir=None if args.paper_strict else args.ppo_hp_dir,
+            pbt_dir=None if args.paper_strict else args.pbt_dir,
             ppo_gail_dir=args.ppo_gail_dir,
             ppo_gail_opt_dir=args.ppo_gail_opt_dir,
             ppo_sp_opt_dir=args.ppo_sp_opt_dir,
@@ -1197,9 +1220,9 @@ def main():
     elif args.figure == "4a":
         results = {
             "figure_4a": evaluate_figure_4a(
-                ppo_sp_dir=args.ppo_sp_dir,
-                ppo_bc_dir=args.ppo_bc_dir,
-                ppo_hp_dir=args.ppo_hp_dir,
+                ppo_sp_dir=None if args.paper_strict else args.ppo_sp_dir,
+                ppo_bc_dir=None if args.paper_strict else args.ppo_bc_dir,
+                ppo_hp_dir=None if args.paper_strict else args.ppo_hp_dir,
                 bc_dir=args.bc_dir,
                 hp_dir=args.hp_dir,
                 layouts=layouts,
@@ -1216,9 +1239,9 @@ def main():
     elif args.figure == "4b":
         results = {
             "figure_4b": evaluate_figure_4b(
-                ppo_bc_dir=args.ppo_bc_dir,
-                ppo_hp_dir=args.ppo_hp_dir,
-                pbt_dir=args.pbt_dir,
+                ppo_bc_dir=None if args.paper_strict else args.ppo_bc_dir,
+                ppo_hp_dir=None if args.paper_strict else args.ppo_hp_dir,
+                pbt_dir=None if args.paper_strict else args.pbt_dir,
                 bc_dir=args.bc_dir,
                 hp_dir=args.hp_dir,
                 layouts=layouts,
