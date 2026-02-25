@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=oc_pbt
 #SBATCH --account=mit_general
-#SBATCH --qos=mit_preemptable
+#SBATCH --qos=normal
 #SBATCH --partition=mit_normal_gpu
 #SBATCH --array=0-24
 #SBATCH --gres=gpu:1
