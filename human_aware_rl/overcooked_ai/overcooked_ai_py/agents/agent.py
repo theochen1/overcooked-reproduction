@@ -368,7 +368,7 @@ class GreedyHumanModel(Agent):
 
     def get_lowest_cost_action_and_goal(self, start_pos_and_or, motion_goals):
         """Returns action and goal that correspond to the cheapest plan among possible motion goals"""
-        min_cost = np.Inf
+        min_cost = np.inf
         best_action, best_goal = None, None
         for goal in motion_goals:
             action_plan, _, plan_cost = self.mlp.mp.get_plan(start_pos_and_or, goal)

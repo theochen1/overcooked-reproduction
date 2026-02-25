@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: human-aware-rl-jax-lift
+Version: 0.1.0
+Summary: JAX liftover of legacy human_aware_rl codebase
+Requires-Python: >=3.10
+Requires-Dist: jax
+Requires-Dist: jaxlib
+Requires-Dist: flax
+Requires-Dist: optax
+Requires-Dist: numpy
+Requires-Dist: pytest

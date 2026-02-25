@@ -433,7 +433,7 @@ def pbt_one_run(params, seed):
     # MAIN LOOP
 
     def pbt_training():
-        best_sparse_rew_avg = [-np.Inf] * population_size
+        best_sparse_rew_avg = [-np.inf] * population_size
 
         for pbt_iter in range(1, params["NUM_PBT_ITER"] + 1):
             print("\n\n\nPBT ITERATION NUM {}".format(pbt_iter))

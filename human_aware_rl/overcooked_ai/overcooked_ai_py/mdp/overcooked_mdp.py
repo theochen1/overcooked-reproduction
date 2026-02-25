@@ -237,7 +237,7 @@ class OvercookedState(object):
 
     @property
     def num_orders_remaining(self):
-        return np.Inf if self.order_list is None else len(self.order_list)
+        return np.inf if self.order_list is None else len(self.order_list)
 
     def has_object(self, pos):
         return pos in self.objects

@@ -1,0 +1,6 @@
+jax
+jaxlib
+flax
+optax
+numpy
+pytest

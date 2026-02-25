@@ -144,7 +144,7 @@ class AgentEvaluator(object):
         eps_starts = [np.zeros(len(traj)) for traj in rollout_trajs["ep_dones"]]
         for ep_starts in eps_starts:
             ep_starts[0] = 1
-        eps_starts = [ep_starts.astype(np.bool) for ep_starts in eps_starts]
+        eps_starts = [ep_starts.astype(np.bool_) for ep_starts in eps_starts]
 
         stable_baselines_trajs_dict = {
             'actions': np.concatenate(rollout_trajs["ep_actions"]),

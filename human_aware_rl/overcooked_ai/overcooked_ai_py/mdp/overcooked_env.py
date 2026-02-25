@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import tqdm
 import numpy as np
 from overcooked_ai_py.utils import mean_and_std_err
@@ -129,7 +129,7 @@ class OvercookedEnv(object):
         self.reset()
         return successor_state, done
 
-    def run_agents(self, agent_pair, include_final_state=False, display=False, display_until=np.Inf):
+    def run_agents(self, agent_pair, include_final_state=False, display=False, display_until=np.inf):
         """
         Trajectory returned will a list of state-action pairs (s_t, joint_a_t, r_t, done_t).
         """
@@ -161,7 +161,7 @@ class OvercookedEnv(object):
 
         return np.array(trajectory), self.t, self.cumulative_sparse_rewards, self.cumulative_shaped_rewards
 
-    def get_rollouts(self, agent_pair, num_games, display=False, final_state=False, agent_idx=0, reward_shaping=0.0, display_until=np.Inf, info=True):
+    def get_rollouts(self, agent_pair, num_games, display=False, final_state=False, agent_idx=0, reward_shaping=0.0, display_until=np.inf, info=True):
         """
         Simulate `num_games` number rollouts with the current agent_pair and returns processed 
         trajectories.
