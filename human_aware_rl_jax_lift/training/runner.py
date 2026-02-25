@@ -1,5 +1,7 @@
 """Rollout collection mirroring legacy two-agent runner behavior."""
 
+import sys
+import time
 from dataclasses import dataclass
 from typing import Dict, List
 
@@ -51,6 +53,7 @@ class RolloutRunner:
             lambda params, obs, rng: _policy_step_impl(self.train_state.apply_fn, params, obs, rng)
         )
         _, self.obs0, self.obs1, self.agent_idx = self.vec_env.reset_all()
+        self._n_rollouts = 0  # track how many rollouts have been collected
 
     def _policy_step(
         self, obs: np.ndarray, rng: jax.Array
@@ -72,7 +75,20 @@ class RolloutRunner:
         val_buf, logp_buf = [], []
         ep_returns, ep_sparse_returns = [], []
 
-        for _ in range(self.horizon):
+        is_first = (self._n_rollouts == 0)
+        t_rollout = time.time()
+        heartbeat_interval = 50  # print progress every N steps on first 2 rollouts
+
+        for step in range(self.horizon):
+            # Heartbeat: print progress for first two rollouts to confirm not hung
+            if self._n_rollouts < 2 and step % heartbeat_interval == 0:
+                elapsed = time.time() - t_rollout
+                print(
+                    f"  [rollout {self._n_rollouts} step {step}/{self.horizon}] "
+                    f"+{elapsed:.1f}s",
+                    flush=True,
+                )
+
             rng, rng_policy, rng_partner = jax.random.split(rng, 3)
             actions, values, logp = self._policy_step(self.obs0, rng_policy)
             other_actions = self.other_agent.act(
@@ -101,6 +117,16 @@ class RolloutRunner:
             self.obs0 = step_out.obs0
             self.obs1 = step_out.obs1
             self.agent_idx = step_out.other_agent_env_idx
+
+        if self._n_rollouts < 2:
+            print(
+                f"  [rollout {self._n_rollouts} DONE] "
+                f"{time.time()-t_rollout:.2f}s for {self.horizon} steps "
+                f"({self.vec_env.num_envs} envs) "
+                f"-> {self.horizon * self.vec_env.num_envs / max(time.time()-t_rollout, 1e-6):.0f} steps/s",
+                flush=True,
+            )
+        self._n_rollouts += 1
 
         _, next_values = self.train_state.apply_fn(self.train_state.params, jnp.asarray(self.obs0, dtype=jnp.float32))
         infos = {

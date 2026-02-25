@@ -45,6 +45,11 @@ def _log_table(kvs: Dict[str, object]) -> None:
     sys.stdout.flush()
 
 
+def _ts(t0: float) -> str:
+    """Elapsed seconds since t0, formatted."""
+    return f"+{time.time() - t0:.1f}s"
+
+
 def _explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> float:
     var_y = np.var(y_true)
     return float("nan") if var_y < 1e-8 else float(1.0 - np.var(y_true - y_pred) / var_y)
@@ -86,13 +91,6 @@ def _current_lr(train_state, fallback: float) -> float:
         return float(train_state.opt_state.hyperparams["learning_rate"])
     except Exception:
         pass
-    try:
-        # Common optax ScaleByScheduleState location
-        for leaf in jax.tree_util.tree_leaves(train_state.opt_state):
-            if hasattr(leaf, "count"):
-                break
-    except Exception:
-        pass
     return fallback
 
 
@@ -114,19 +112,10 @@ def ppo_run(
 ) -> List[dict]:
     """
     Run PPO training over one or more seeds.
-
-    Prints a per-update stats table in the style of OpenAI Baselines PPO2:
-
-        Curr learning rate 0.001    Curr reward per step 0.023
-        ----------------------------------------------------------
-        | approxkl           | 0.00021524  |
-        | clipfrac           | 0.024125    |
-        ...
-        ----------------------------------------------------------
-        Current reward shaping 0.9952
-
-    Returns per-seed summary dictionaries.
+    Prints Baselines-style per-update tables and timing milestones.
     """
+    t0 = time.time()
+
     if self_play_horizon is None:
         self_play_horizon = config.self_play_horizon
     if rew_shaping_horizon is None:
@@ -134,7 +123,12 @@ def ppo_run(
     if lr_annealing is None:
         lr_annealing = config.lr_annealing
 
+    print(f"[{_ts(t0)}] Parsing layout: {layout_name}")
+    sys.stdout.flush()
     terrain = parse_layout(layout_name)
+    print(f"[{_ts(t0)}] Layout parsed.")
+    sys.stdout.flush()
+
     run_name = ex_name or f"ppo_{other_agent_type}_{layout_name}"
     root_dir = Path(save_dir) / run_name
     root_dir.mkdir(parents=True, exist_ok=True)
@@ -149,18 +143,30 @@ def ppo_run(
     print(f"Saving data to {root_dir}/")
     grad_updates_per_agent = config.num_epochs * config.num_minibatches * num_updates
     print(f"Grad updates per agent {grad_updates_per_agent:.1f}")
+    print(f"num_updates={num_updates}  batch_size={batch_size}  minibatch_size={minibatch_size}  num_envs={config.num_envs}  horizon={config.horizon}")
+    sys.stdout.flush()
 
     for seed in seeds:
+        print(f"\n[{_ts(t0)}] === Seed {seed} ===")
+        sys.stdout.flush()
+
         seed_dir = root_dir / f"seed{seed}"
         seed_dir.mkdir(parents=True, exist_ok=True)
         with (seed_dir / "config.pkl").open("wb") as f:
             pickle.dump({"layout_name": layout_name, "config": asdict(config), "seed": seed}, f)
 
         rng = set_global_seed(int(seed))
+
+        print(f"[{_ts(t0)}] Creating probe VectorizedEnv (1 env)...")
+        sys.stdout.flush()
         vec_probe = VectorizedEnv(terrain=terrain, num_envs=1, horizon=config.horizon)
         _, probe_obs0, _, _ = vec_probe.reset_all()
         obs_shape = probe_obs0.shape[1:]
+        print(f"[{_ts(t0)}] obs_shape={obs_shape}")
+        sys.stdout.flush()
 
+        print(f"[{_ts(t0)}] Creating train state...")
+        sys.stdout.flush()
         if lr_annealing != 1.0:
             lr_schedule = optax.linear_schedule(
                 init_value=config.learning_rate,
@@ -170,7 +176,11 @@ def ppo_run(
             train_state = create_train_state(rng, obs_shape, config, learning_rate=lr_schedule)
         else:
             train_state = create_train_state(rng, obs_shape, config)
+        print(f"[{_ts(t0)}] Train state created.")
+        sys.stdout.flush()
 
+        print(f"[{_ts(t0)}] Creating VectorizedEnv ({config.num_envs} envs)...")
+        sys.stdout.flush()
         vec_env = VectorizedEnv(
             terrain=terrain,
             num_envs=config.num_envs,
@@ -194,6 +204,8 @@ def ppo_run(
                 stochastic=True,
             )
 
+        print(f"[{_ts(t0)}] Creating RolloutRunner (triggers reset_all)...")
+        sys.stdout.flush()
         runner = RolloutRunner(
             vec_env=vec_env,
             train_state=train_state,
@@ -201,6 +213,8 @@ def ppo_run(
             horizon=config.horizon,
             trajectory_self_play=bool(config.trajectory_self_play),
         )
+        print(f"[{_ts(t0)}] RolloutRunner ready.")
+        sys.stdout.flush()
 
         logs: Dict[str, list] = {
             "eprewmean":          [],
@@ -227,7 +241,15 @@ def ppo_run(
 
             rng, rollout_rng = jax.random.split(rng)
             runner.train_state = train_state
+
+            if update == 0:
+                print(f"[{_ts(t0)}] Starting first rollout (JIT compile expected here)...")
+                sys.stdout.flush()
+            t_rollout = time.time()
             rollout = runner.collect_rollout(rollout_rng, self_play_randomization=sp_factor)
+            if update == 0:
+                print(f"[{_ts(t0)}] First rollout done in {time.time()-t_rollout:.1f}s")
+                sys.stdout.flush()
 
             adv, ret = compute_gae(
                 jnp.asarray(rollout.rewards, dtype=jnp.float32),
@@ -244,9 +266,6 @@ def ppo_run(
             adv_flat     = _flatten_rollout(np.asarray(adv))
             ret_flat     = _flatten_rollout(np.asarray(ret))
 
-            # ------------------------------------------------------------------
-            # Gradient updates — accumulate per-minibatch metrics
-            # ------------------------------------------------------------------
             mb_loss, mb_pl, mb_vl, mb_ent, mb_kl, mb_cf = [], [], [], [], [], []
 
             for _ in range(config.num_epochs):
@@ -270,9 +289,6 @@ def ppo_run(
                     mb_kl.append(  float(metrics.get("approxkl",    0.0)))
                     mb_cf.append(  float(metrics.get("clipfrac",    0.0)))
 
-            # ------------------------------------------------------------------
-            # Aggregate
-            # ------------------------------------------------------------------
             mean_loss = float(np.mean(mb_loss)) if mb_loss else 0.0
             mean_pl   = float(np.mean(mb_pl))
             mean_vl   = float(np.mean(mb_vl))
@@ -290,9 +306,6 @@ def ppo_run(
             remaining = elapsed * (num_updates - update - 1) / max(update + 1, 1)
             current_lr = _current_lr(train_state, float(config.learning_rate))
 
-            # ------------------------------------------------------------------
-            # Append to logs
-            # ------------------------------------------------------------------
             logs["loss"].append(mean_loss)
             logs["eprewmean"].append(eprewmean)
             logs["ep_sparse_rew_mean"].append(ep_sparse)
@@ -303,9 +316,6 @@ def ppo_run(
             logs["clipfrac"].append(mean_cf)
             logs["explained_variance"].append(ev)
 
-            # ------------------------------------------------------------------
-            # Print Baselines-style table
-            # ------------------------------------------------------------------
             rew_per_step = eprewmean / max(config.horizon, 1)
             print(
                 f"Curr learning rate {current_lr} \t "
