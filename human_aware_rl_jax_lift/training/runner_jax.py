@@ -53,6 +53,20 @@ class RolloutBatch:
     infos: dict              # scalar summary stats (populated after scan)
 
 
+def _value_to_1d(values: jnp.ndarray, *, name: str) -> jnp.ndarray:
+    """Ensure value head output is [N] for PPO/GAE.
+
+    Some apply_fn implementations return [N] while others return [N, 1].
+    This normalizes both cases without using squeeze on a non-singleton axis.
+    """
+    if values.ndim == 1:
+        return values
+    if values.ndim == 2 and values.shape[-1] == 1:
+        return values[:, 0]
+    # Static-shape check at trace time (helps catch accidental multi-head values)
+    raise ValueError(f"{name} must have shape [N] or [N,1], got {values.shape}")
+
+
 # ---------------------------------------------------------------------------
 # Scan-based rollout builder
 # ---------------------------------------------------------------------------
@@ -93,7 +107,7 @@ def make_rollout_fn(
 
             # ---- Training-agent forward pass --------------------------------
             logits, values = train_state.apply_fn(train_state.params, obs0)
-            values = values.squeeze(-1)           # [N]
+            values = _value_to_1d(values, name="values")  # [N]
             actions = jax.random.categorical(rng_train, logits).astype(jnp.int32)
             logp_all = jax.nn.log_softmax(logits)
             logp = logp_all[jnp.arange(num_envs), actions]  # [N]
@@ -134,7 +148,7 @@ def make_rollout_fn(
 
         # Bootstrap value for GAE
         _, next_values = train_state.apply_fn(train_state.params, final_obs0)
-        next_value = next_values.squeeze(-1)  # [N]
+        next_value = _value_to_1d(next_values, name="next_values")  # [N]
 
         return (
             obs_t, actions_t, rewards_t, dones_t, values_t, logp_t, sparse_t,
