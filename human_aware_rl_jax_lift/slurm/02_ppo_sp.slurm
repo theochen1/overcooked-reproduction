@@ -3,13 +3,17 @@
 #SBATCH --account=mit_general
 #SBATCH --qos=normal
 #SBATCH --partition=mit_normal_gpu
-#SBATCH --array=0-4
+#SBATCH --array=0-4%2
 #SBATCH -G 1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=48G
 #SBATCH --time=03:00:00
 #SBATCH --output=logs/ppo_sp_%A_%a.out
 #SBATCH --error=logs/ppo_sp_%A_%a.err
+
+# NOTE: The public mit_normal_gpu QOS enforces per-user CPU limits.
+# This array requests 16 CPUs per task; the "%2" throttles concurrency to
+# keep total CPUs <= 32 across the array (avoids QOSMaxCpuPerUserLimit).
 
 LAYOUTS=(simple unident_s random0 random1 random3)
 PPO_SP_SEEDS=(2229 7649 7225 9807 386)
@@ -24,6 +28,7 @@ conda activate overcooked
 
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 
 # JAX persistent compilation cache — avoids recompiling kernels on every job.
 # After the first run, subsequent jobs on the same GPU model skip the XLA compile.

@@ -3,13 +3,17 @@
 #SBATCH --account=mit_general
 #SBATCH --qos=normal
 #SBATCH --partition=mit_normal_gpu
-#SBATCH --array=0-9
+#SBATCH --array=0-9%2
 #SBATCH -G 1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=48G
 #SBATCH --time=05:30:00
 #SBATCH --output=logs/ppo_bc_%A_%a.out
 #SBATCH --error=logs/ppo_bc_%A_%a.err
+
+# NOTE: The public mit_normal_gpu QOS enforces per-user CPU limits.
+# This array requests 16 CPUs per task; the "%2" throttles concurrency to
+# keep total CPUs <= 32 across the array (avoids QOSMaxCpuPerUserLimit).
 
 LAYOUTS=(simple unident_s random0 random1 random3)
 SEEDS_TRAIN=(9456 1887 5578 5987 516)
@@ -34,6 +38,8 @@ module load miniforge
 conda activate overcooked
 
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 
 echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -1)"
 
