@@ -1,4 +1,7 @@
-from gymnasium.envs.registration import register
+try:
+    from gymnasium.envs.registration import register
+except ModuleNotFoundError:
+    from gym.envs.registration import register
 
 register(
     id='Overcooked-v0',

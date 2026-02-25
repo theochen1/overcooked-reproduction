@@ -30,6 +30,7 @@ ENV/
 # Root-level generated folders
 logs/
 parity_artifacts/
+containers/
 
 # Project-generated run folders anywhere in repo
 **/logs/

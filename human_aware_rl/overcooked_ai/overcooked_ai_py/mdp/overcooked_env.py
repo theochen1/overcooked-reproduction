@@ -1,4 +1,7 @@
-import gymnasium as gym
+try:
+    import gymnasium as gym
+except ModuleNotFoundError:
+    import gym
 import tqdm
 import numpy as np
 from overcooked_ai_py.utils import mean_and_std_err
