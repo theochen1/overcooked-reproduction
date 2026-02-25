@@ -21,7 +21,6 @@ echo "Node: $(hostname) | Start: $(date)"
 module load cuda/12.1 2>/dev/null || true
 module load miniforge
 conda activate overcooked
-pip install -U "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 export PYTHONUNBUFFERED=1
