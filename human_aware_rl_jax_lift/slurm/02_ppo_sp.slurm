@@ -25,6 +25,11 @@ conda activate overcooked
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 export PYTHONUNBUFFERED=1
 
+# JAX persistent compilation cache — avoids recompiling kernels on every job.
+# After the first run, subsequent jobs on the same GPU model skip the 10-15 min XLA compile.
+export JAX_COMPILATION_CACHE_DIR="/home/tchen22/.cache/jax_compile_cache"
+mkdir -p "$JAX_COMPILATION_CACHE_DIR"
+
 echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -1)"
 
 # Fail fast if JAX cannot see the GPU
