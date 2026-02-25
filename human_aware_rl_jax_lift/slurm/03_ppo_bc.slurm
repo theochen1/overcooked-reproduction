@@ -2,9 +2,9 @@
 #SBATCH --job-name=oc_ppo_bc
 #SBATCH --account=mit_general
 #SBATCH --qos=mit_normal_gpu
-#SBATCH --partition=sched_mit_normal_gpu
+#SBATCH --partition=mit_normal_gpu
 #SBATCH --array=0-9
-#SBATCH --gres=gpu:h200:1
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=60G
 #SBATCH --time=05:30:00
@@ -37,6 +37,7 @@ source activate overcooked
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 
+mkdir -p "$SLURM_SUBMIT_DIR/../logs"
 cd "$SLURM_SUBMIT_DIR/.."
 
 BC_PATHS_FILE="data/bc_runs/best_bc_model_paths.pkl"

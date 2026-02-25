@@ -2,9 +2,9 @@
 #SBATCH --job-name=oc_pbt
 #SBATCH --account=mit_general
 #SBATCH --qos=mit_preemptable
-#SBATCH --partition=sched_mit_normal_gpu
+#SBATCH --partition=mit_normal_gpu
 #SBATCH --array=0-24
-#SBATCH --gres=gpu:h200:1
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=80G
 #SBATCH --time=02:30:00
@@ -34,6 +34,7 @@ source activate overcooked
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 
+mkdir -p "$SLURM_SUBMIT_DIR/../logs"
 cd "$SLURM_SUBMIT_DIR/.."
 
 EXTRA_ARGS=""
