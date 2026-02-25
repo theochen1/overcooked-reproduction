@@ -130,9 +130,19 @@ def evaluate_ppo_sp_for_layout(layout, bc_test_path, seeds=PPO_SP_SEEDS, num_rou
     evaluator = AgentEvaluator(mdp_params=bc_params["mdp_params"], env_params=bc_params["env_params"])
 
     sp_results = defaultdict(list)
+    skipped_seeds = []
     for seed in seeds:
         reset_tf()  # MUST reset between seeds — TF1 default graph/session reuse.
-        agent_ppo, _ = load_ppo_agent_with_best_fallback(f"ppo_sp_{layout}", seed)
+        try:
+            agent_ppo, _ = load_ppo_agent_with_best_fallback(f"ppo_sp_{layout}", seed)
+        except Exception as exc:
+            skipped_seeds.append(seed)
+            print(
+                "  [WARN] Skipping PPO_SP seed {} for layout {} due to load failure: {}".format(
+                    seed, layout, repr(exc)
+                )
+            )
+            continue
         # Re-load BC agent after reset_tf.
         agent_bc_test, _ = get_bc_agent_from_saved(bc_test_path)
 
@@ -150,6 +160,10 @@ def evaluate_ppo_sp_for_layout(layout, bc_test_path, seeds=PPO_SP_SEEDS, num_rou
         bc_ppo = evaluator.evaluate_agent_pair(AgentPair(agent_bc_test, agent_ppo), num_games=num_rounds)
         sp_results["PPO_SP+BC_test_1"].append(np.mean(bc_ppo["ep_returns"]))
 
+    if len(sp_results["PPO_SP+PPO_SP"]) == 0:
+        raise RuntimeError(
+            "No PPO_SP seeds were evaluated for layout {}. Skipped seeds: {}".format(layout, skipped_seeds)
+        )
     return dict(sp_results)
 
 
@@ -190,6 +204,7 @@ def evaluate_ppo_bc_for_layout(
     """
     assert len(bc_train_seeds) == len(bc_test_seeds), "Seed lists must be same length"
     results = defaultdict(list)
+    skipped_seed_pairs = []
 
     for seed_idx in range(len(bc_train_seeds)):
         reset_tf()
@@ -197,9 +212,22 @@ def evaluate_ppo_bc_for_layout(
         evaluator = AgentEvaluator(mdp_params=bc_params["mdp_params"], env_params=bc_params["env_params"])
 
         # Orange bars: PPO trained with BC_train, evaluated vs BC_test.
-        agent_ppo_bc_train, _ = load_ppo_agent_with_best_fallback(
-            f"ppo_bc_train_{layout}", bc_train_seeds[seed_idx]
-        )
+        try:
+            agent_ppo_bc_train, _ = load_ppo_agent_with_best_fallback(
+                f"ppo_bc_train_{layout}", bc_train_seeds[seed_idx]
+            )
+            agent_ppo_bc_test, _ = load_ppo_agent_with_best_fallback(
+                f"ppo_bc_test_{layout}", bc_test_seeds[seed_idx]
+            )
+        except Exception as exc:
+            skipped_seed_pairs.append((bc_train_seeds[seed_idx], bc_test_seeds[seed_idx]))
+            print(
+                "  [WARN] Skipping PPO_BC seed pair (train={}, test={}) for layout {} due to load failure: {}".format(
+                    bc_train_seeds[seed_idx], bc_test_seeds[seed_idx], layout, repr(exc)
+                )
+            )
+            continue
+
         traj0 = evaluator.evaluate_agent_pair(AgentPair(agent_ppo_bc_train, agent_bc_test), num_games=num_rounds)
         results["PPO_BC_train+BC_test_0"].append(np.mean(traj0["ep_returns"]))
 
@@ -207,25 +235,32 @@ def evaluate_ppo_bc_for_layout(
         results["PPO_BC_train+BC_test_1"].append(np.mean(traj1["ep_returns"]))
 
         # Gold standard: PPO trained with BC_test (has access to true proxy).
-        agent_ppo_bc_test, _ = load_ppo_agent_with_best_fallback(
-            f"ppo_bc_test_{layout}", bc_test_seeds[seed_idx]
-        )
         traj0_gs = evaluator.evaluate_agent_pair(AgentPair(agent_ppo_bc_test, agent_bc_test), num_games=num_rounds)
         results["PPO_BC_test+BC_test_0"].append(np.mean(traj0_gs["ep_returns"]))
 
         traj1_gs = evaluator.evaluate_agent_pair(AgentPair(agent_bc_test, agent_ppo_bc_test), num_games=num_rounds)
         results["PPO_BC_test+BC_test_1"].append(np.mean(traj1_gs["ep_returns"]))
 
+    if len(results["PPO_BC_train+BC_test_0"]) == 0:
+        raise RuntimeError(
+            "No PPO_BC seed pairs were evaluated for layout {}. Skipped seed pairs: {}".format(
+                layout, skipped_seed_pairs
+            )
+        )
     return dict(results)
 
 
-def collect_all_results(best_bc_model_paths, layouts):
+def collect_all_results(best_bc_model_paths, layouts, existing_results=None, autosave_path=None):
     """
     Returns: all_results[layout][algorithm] = list of per-seed means,
     except BC entries which are already (mean, stderr) 2-tuples.
     """
-    all_results = {}
+    all_results = {} if existing_results is None else dict(existing_results)
     for layout in layouts:
+        if layout in all_results:
+            print("Skipping layout {} (already in saved results)".format(layout))
+            continue
+
         print("\n" + ("=" * 50))
         print("Evaluating layout: {}".format(layout))
         print("=" * 50)
@@ -244,6 +279,9 @@ def collect_all_results(best_bc_model_paths, layouts):
         layout_results.update(evaluate_ppo_bc_for_layout(layout, bc_test_path))
 
         all_results[layout] = layout_results
+        if autosave_path is not None:
+            save_pickle(all_results, autosave_path)
+            print("  Intermediate results saved to {}".format(autosave_path))
         print("  Done: {}".format(layout))
 
     return all_results
@@ -359,6 +397,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Run evaluation and save results, but skip figure generation",
     )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Ignore existing saved results and recompute selected layouts",
+    )
     args = parser.parse_args()
 
     invalid_layouts = [layout for layout in args.layouts if layout not in LAYOUTS]
@@ -376,7 +419,17 @@ if __name__ == "__main__":
         if set(args.layouts) != set(all_results.keys()):
             all_results = {layout: all_results[layout] for layout in args.layouts}
     else:
-        all_results = collect_all_results(best_bc_model_paths, args.layouts)
+        existing_results = None
+        if (not args.no_resume) and os.path.exists(RESULTS_SAVE_PATH):
+            existing_results = load_pickle(RESULTS_SAVE_PATH)
+            if len(existing_results) > 0:
+                print("Resuming from existing results in {}".format(RESULTS_SAVE_PATH))
+        all_results = collect_all_results(
+            best_bc_model_paths,
+            args.layouts,
+            existing_results=existing_results,
+            autosave_path=RESULTS_SAVE_PATH,
+        )
         save_pickle(all_results, RESULTS_SAVE_PATH)
         print("Raw results saved to {}".format(RESULTS_SAVE_PATH))
 
