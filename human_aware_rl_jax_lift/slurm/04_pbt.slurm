@@ -26,9 +26,7 @@ SEED=${PBT_SEEDS[$SEED_IDX]}
 echo "Task=$SLURM_ARRAY_TASK_ID layout=$LAYOUT seed=$SEED agent_type=$AGENT_TYPE"
 echo "Node: $(hostname) | Start: $(date)"
 
-module load anaconda/2023b 2>/dev/null || true
 module load cuda/12.1 2>/dev/null || true
-eval "$(conda shell.bash hook)"
 conda activate overcooked
 
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
