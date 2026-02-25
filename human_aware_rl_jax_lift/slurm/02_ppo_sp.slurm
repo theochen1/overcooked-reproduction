@@ -23,6 +23,12 @@ module load miniforge
 conda activate overcooked
 
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
+export PYTHONUNBUFFERED=1
+
+# XLA disk cache — avoids recompiling from scratch on every job
+export XLA_FLAGS="--xla_gpu_enable_disk_caching=true"
+export XLA_CACHE_DIR="/home/tchen22/.cache/xla_compile_cache"
+mkdir -p "$XLA_CACHE_DIR"
 
 echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -1)"
 
@@ -39,7 +45,7 @@ print('GPU check passed.')
 mkdir -p "$SLURM_SUBMIT_DIR/../logs"
 cd "$SLURM_SUBMIT_DIR/.."
 
-python scripts/train_ppo_sp.py \
+python -u scripts/train_ppo_sp.py \
     --layout    "$LAYOUT" \
     --seeds     "${PPO_SP_SEEDS[@]}" \
     --save_dir  data/ppo_runs
