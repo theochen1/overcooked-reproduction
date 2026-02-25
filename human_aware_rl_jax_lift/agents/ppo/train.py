@@ -31,6 +31,7 @@ def create_train_state(
     return TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
 
+@jax.jit
 def compute_gae(
     rewards,
     values,
@@ -41,12 +42,12 @@ def compute_gae(
 ):
     """
     Compute generalized advantages with reverse-time scan.
-
+    JIT-compiled for fast execution on GPU.
     Inputs are time-major tensors [T, N] (or [T] for single-env).
     """
     rewards = jnp.asarray(rewards, dtype=jnp.float32)
-    values = jnp.asarray(values, dtype=jnp.float32)
-    dones = jnp.asarray(dones, dtype=jnp.float32)
+    values  = jnp.asarray(values,  dtype=jnp.float32)
+    dones   = jnp.asarray(dones,   dtype=jnp.float32)
 
     if bootstrap_value is None:
         tail = jnp.zeros_like(values[-1:])
@@ -102,11 +103,24 @@ def _ppo_update_step_jit(
 
         entropy = -(jax.nn.softmax(logits) * logp_all).sum(axis=-1).mean()
         loss = actor_loss + vf_coef * critic_loss - ent_coef * entropy
-        return loss, (actor_loss, critic_loss, entropy)
+
+        # Diagnostics matching Baselines logging convention
+        approxkl  = 0.5 * jnp.mean(jnp.square(old_logp - logp))
+        clipfrac  = jnp.mean((jnp.abs(ratio - 1.0) > clip_eps).astype(jnp.float32))
+
+        return loss, (actor_loss, critic_loss, entropy, approxkl, clipfrac)
 
     (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
     state = state.apply_gradients(grads=grads)
-    return state, {"loss": loss, "actor_loss": aux[0], "critic_loss": aux[1], "entropy": aux[2]}
+    actor_loss, critic_loss, entropy, approxkl, clipfrac = aux
+    return state, {
+        "loss":         loss,
+        "policy_loss":  actor_loss,   # match Baselines key names
+        "value_loss":   critic_loss,
+        "entropy":      entropy,
+        "approxkl":     approxkl,
+        "clipfrac":     clipfrac,
+    }
 
 
 def ppo_update_step(
