@@ -10,8 +10,8 @@ Key design choices
   every state field by vmapping ``make_initial_state`` over dummy indices.
 * ``batched_step`` is ``@jax.jit`` and calls ``jax.vmap(_single_step)``.
   Each vmap'd call is a pure function: no Python conditionals on JAX values.
-* Episode resets are handled *inside* vmap with ``jax.lax.cond`` /
-  ``jnp.where`` so the XLA program stays static-shape.
+* Episode resets are handled *inside* vmap with ``jnp.where`` so the XLA
+  program stays static-shape.
 * The ``shaping_factor`` scalar is passed as a JAX array so it can be
   updated between updates without recompilation (not a static arg).
 """
@@ -21,6 +21,7 @@ from typing import Tuple
 import jax
 import jax.numpy as jnp
 from flax import struct
+from jax import tree_util
 
 from human_aware_rl_jax_lift.encoding.ppo_masks import lossless_state_encoding_20
 from human_aware_rl_jax_lift.env.overcooked_mdp import step as env_step
@@ -79,6 +80,7 @@ def _single_step(
     other_action: jnp.ndarray,
     ep_sparse: jnp.ndarray,
     ep_shaped: jnp.ndarray,
+    reset_key: jax.Array,
     shaping_factor: jnp.ndarray,
     horizon: int,
 ) -> Tuple[OvercookedState, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -94,13 +96,24 @@ def _single_step(
     )
     reward = sparse + shaped
     done = (next_state.timestep >= jnp.array(horizon, dtype=jnp.int32)).astype(jnp.float32)
+    done_b = done.astype(jnp.bool_)
 
     # Accumulate episode rewards; reset on done.
-    new_ep_sparse = jnp.where(done, 0.0, ep_sparse + sparse)
-    new_ep_shaped = jnp.where(done, 0.0, ep_shaped + shaped)
+    new_ep_sparse = jnp.where(done_b, 0.0, ep_sparse + sparse)
+    new_ep_shaped = jnp.where(done_b, 0.0, ep_shaped + shaped)
 
-    # Flip agent_idx on episode end.
-    new_agent_idx = jnp.where(done.astype(jnp.bool_), 1 - agent_idx, agent_idx)
+    # Reset env state on episode end; otherwise timesteps keep increasing and
+    # done stays permanently true after the first episode.
+    reset_state = make_initial_state(terrain)
+    next_state = tree_util.tree_map(
+        lambda a, b: jnp.where(done_b, b, a),
+        next_state,
+        reset_state,
+    )
+
+    # Resample which player is the training agent at the start of each episode.
+    reset_agent_idx = jax.random.randint(reset_key, (), 0, 2, dtype=jnp.int32)
+    new_agent_idx = jnp.where(done_b, reset_agent_idx, agent_idx)
 
     return next_state, reward, done, new_agent_idx, new_ep_sparse, new_ep_shaped, sparse
 
@@ -115,6 +128,7 @@ def batched_step(
     bstate: BatchedEnvState,
     training_actions: jnp.ndarray,   # [N] int32
     other_actions: jnp.ndarray,       # [N] int32
+    reset_keys: jax.Array,            # [N, 2] PRNGKeys for env resets (used when done)
     shaping_factor: jnp.ndarray,      # scalar float32
     horizon: int,
 ) -> Tuple[BatchedEnvState, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -131,8 +145,8 @@ def batched_step(
     sparse_r   : [N]  float32  sparse component only (for logging)
     """
     next_states, rewards, dones, new_agent_idx, new_ep_sparse, new_ep_shaped, sparse_r = jax.vmap(
-        lambda s, idx, ta, oa, ep_sp, ep_sh: _single_step(
-            terrain, s, idx, ta, oa, ep_sp, ep_sh, shaping_factor, horizon
+        lambda s, idx, ta, oa, ep_sp, ep_sh, rk: _single_step(
+            terrain, s, idx, ta, oa, ep_sp, ep_sh, rk, shaping_factor, horizon
         )
     )(
         bstate.states,
@@ -141,6 +155,7 @@ def batched_step(
         other_actions,
         bstate.ep_sparse_accum,
         bstate.ep_shaped_accum,
+        reset_keys,
     )
 
     new_bstate = BatchedEnvState(

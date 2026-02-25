@@ -103,7 +103,7 @@ def make_rollout_fn(
     ):
         def scan_step(carry, _):
             bstate, obs0, obs1, rng = carry
-            rng, rng_train, rng_other, rng_sp_mix = jax.random.split(rng, 4)
+            rng, rng_train, rng_other, rng_sp_mix, rng_reset = jax.random.split(rng, 5)
 
             # ---- Training-agent forward pass --------------------------------
             logits, values = train_state.apply_fn(train_state.params, obs0)
@@ -122,8 +122,15 @@ def make_rollout_fn(
             other_actions = other_actions_sp
 
             # ---- Environment step (vmapped, on-device) ----------------------
+            reset_keys = jax.random.split(rng_reset, num_envs)
             new_bstate, new_obs0, new_obs1, rewards, dones, sparse_r = batched_step(
-                terrain, bstate, actions, other_actions, shaping_factor, horizon
+                terrain,
+                bstate,
+                actions,
+                other_actions,
+                reset_keys,
+                shaping_factor,
+                horizon,
             )
 
             transition = (obs0, actions, rewards, dones, values, logp, sparse_r)
