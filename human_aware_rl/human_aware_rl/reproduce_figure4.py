@@ -12,8 +12,9 @@ from overcooked_ai_py.agents.agent import AgentPair
 from overcooked_ai_py.agents.benchmarking import AgentEvaluator
 
 from human_aware_rl.utils import reset_tf, set_global_seed
+from human_aware_rl.baselines_utils import get_agent_from_saved_model
 from human_aware_rl.imitation.behavioural_cloning import get_bc_agent_from_saved, BC_SAVE_DIR
-from human_aware_rl.ppo.ppo import get_ppo_agent, PPO_DATA_DIR
+from human_aware_rl.ppo.ppo import PPO_DATA_DIR
 from human_aware_rl.experiments.bc_experiments import BEST_BC_MODELS_PATH
 from human_aware_rl.experiments.graphing import get_algorithm_color, get_texture
 
@@ -73,14 +74,50 @@ def get_best_bc_model_paths():
 
 def load_ppo_agent_with_best_fallback(ex_name, seed):
     """Load PPO from best checkpoint if available, else from final model."""
-    best_dir = f"{PPO_DATA_DIR}{ex_name}/seed{seed}/best"
-    use_best = os.path.exists(best_dir)
-    try:
-        return get_ppo_agent(ex_name, seed, best=use_best)
-    except Exception:
-        if use_best:
-            return get_ppo_agent(ex_name, seed, best=False)
-        raise
+
+    def load_from_run_dir(run_dir):
+        # Some runs are saved as <run_dir>/seed{seed}/..., others directly under <run_dir>/...
+        seed_scoped_dir = run_dir + "/seed{}".format(seed)
+        if os.path.exists(seed_scoped_dir):
+            run_dir = seed_scoped_dir
+
+        config = load_pickle(run_dir + "/config")
+        best_dir = run_dir + "/best"
+        final_dir = run_dir + "/ppo_agent"
+        if os.path.exists(best_dir):
+            try:
+                return get_agent_from_saved_model(best_dir, config["sim_threads"]), config
+            except Exception:
+                return get_agent_from_saved_model(final_dir, config["sim_threads"]), config
+        return get_agent_from_saved_model(final_dir, config["sim_threads"]), config
+
+    local_ground_truth_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "ground_truth_runs")
+    )
+    candidate_run_dirs = [
+        f"{PPO_DATA_DIR}{ex_name}/seed{seed}",
+        f"{PPO_DATA_DIR}{ex_name}_seed{seed}",
+        f"{PPO_DATA_DIR}{ex_name}_seed{seed}/seed{seed}",
+        os.path.join(local_ground_truth_root, f"{ex_name}_seed{seed}"),
+        os.path.join(local_ground_truth_root, f"{ex_name}_seed{seed}", f"seed{seed}"),
+    ]
+
+    last_exc = None
+    for run_dir in candidate_run_dirs:
+        if not os.path.exists(run_dir):
+            continue
+        try:
+            return load_from_run_dir(run_dir)
+        except Exception as exc:
+            last_exc = exc
+
+    if last_exc is not None:
+        raise last_exc
+    raise FileNotFoundError(
+        "Could not locate PPO run directory for ex_name={} seed={}. Checked: {}".format(
+            ex_name, seed, candidate_run_dirs
+        )
+    )
 
 
 def evaluate_ppo_sp_for_layout(layout, bc_test_path, seeds=PPO_SP_SEEDS, num_rounds=NUM_ROUNDS):

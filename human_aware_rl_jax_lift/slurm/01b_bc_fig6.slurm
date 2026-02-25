@@ -28,6 +28,7 @@ fi
 
 echo "Task=$IDX layout=$LAYOUT split=$SPLIT epochs=$EPOCH | $(hostname) | $(date)"
 
+module load miniforge
 conda activate overcooked
 export JAX_PLATFORM_NAME=cpu
 

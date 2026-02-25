@@ -30,6 +30,7 @@ echo "Task=$IDX layout=$LAYOUT split=$SPLIT"
 echo "Node: $(hostname) | Start: $(date)"
 
 module load cuda/12.1 2>/dev/null || true
+module load miniforge
 conda activate overcooked
 
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
