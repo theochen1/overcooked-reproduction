@@ -34,10 +34,19 @@ module load cuda/12.1 2>/dev/null || true
 eval "$(conda shell.bash hook)"
 conda activate overcooked
 
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 
 echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -1)"
+
+# Fail fast if JAX cannot see the GPU
+python -c "
+import jax
+devs = jax.devices()
+print('JAX devices:', devs)
+assert any('gpu' in str(d).lower() or 'cuda' in str(d).lower() for d in devs), \
+    f'No GPU found by JAX — check jax[cuda12] install. Devices: {devs}'
+print('GPU check passed.')
+" || exit 1
 
 mkdir -p "$SLURM_SUBMIT_DIR/../logs"
 cd "$SLURM_SUBMIT_DIR/.."
