@@ -4,9 +4,9 @@
 #SBATCH --qos=normal
 #SBATCH --partition=mit_normal_gpu
 #SBATCH --array=0-9
-#SBATCH --gres=gpu:1
+#SBATCH -G 1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=60G
+#SBATCH --mem=48G
 #SBATCH --time=05:30:00
 #SBATCH --output=logs/ppo_bc_%A_%a.out
 #SBATCH --error=logs/ppo_bc_%A_%a.err
