@@ -1,6 +1,6 @@
 """Pure JAX transition function for legacy Overcooked dynamics."""
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import jax.numpy as jnp
 
@@ -16,6 +16,11 @@ from .state import (
     in_bounds,
     pos_to_yx,
 )
+
+# Base reward values (before shaping factor scaling)
+_BASE_PLACEMENT_REW = float(DEFAULT_REW_SHAPING_PARAMS["PLACEMENT_IN_POT_REW"])
+_BASE_DISH_REW      = float(DEFAULT_REW_SHAPING_PARAMS["DISH_PICKUP_REWARD"])
+_BASE_SOUP_REW      = float(DEFAULT_REW_SHAPING_PARAMS["SOUP_PICKUP_REWARD"])
 
 
 def _move_if_direction(terrain: Terrain, pos: jnp.ndarray, ori: jnp.ndarray, action: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
@@ -66,22 +71,37 @@ def step(
     terrain: Terrain,
     state: OvercookedState,
     joint_action: jnp.ndarray,
-    reward_shaping_params: Dict[str, float] | None = None,
+    shaping_factor: Optional[jnp.ndarray] = None,
+    reward_shaping_params: Optional[Dict] = None,
 ) -> Tuple[OvercookedState, jnp.ndarray, jnp.ndarray, Dict[str, jnp.ndarray]]:
     """
     Legacy transition order:
       1) resolve_interacts
       2) resolve_movement
       3) step_environment_effects
+
+    Accepts `shaping_factor` as a JAX scalar (preferred — vmappable, no recompile
+    when value changes) or legacy `reward_shaping_params` dict for backward compat.
     """
-    rsp = DEFAULT_REW_SHAPING_PARAMS if reward_shaping_params is None else reward_shaping_params
+    # Resolve shaping factor
+    if shaping_factor is not None:
+        sf = shaping_factor
+    elif reward_shaping_params is not None:
+        # Legacy dict path: infer scalar factor from PLACEMENT_IN_POT_REW
+        base = _BASE_PLACEMENT_REW if _BASE_PLACEMENT_REW > 0 else 1.0
+        sf = jnp.array(
+            float(reward_shaping_params.get("PLACEMENT_IN_POT_REW", _BASE_PLACEMENT_REW)) / base
+        )
+    else:
+        sf = jnp.array(1.0)
+
     st, sparse_reward, shaped_reward = resolve_interacts(
         terrain=terrain,
         state=state,
         joint_action=joint_action.astype(jnp.int32),
-        placement_in_pot_rew=float(rsp["PLACEMENT_IN_POT_REW"]),
-        dish_pickup_rew=float(rsp["DISH_PICKUP_REWARD"]),
-        soup_pickup_rew=float(rsp["SOUP_PICKUP_REWARD"]),
+        placement_in_pot_rew=_BASE_PLACEMENT_REW * sf,
+        dish_pickup_rew=_BASE_DISH_REW * sf,
+        soup_pickup_rew=_BASE_SOUP_REW * sf,
     )
     st = _resolve_movement(terrain, st, joint_action.astype(jnp.int32))
     st = _step_environment_effects(terrain, st)
