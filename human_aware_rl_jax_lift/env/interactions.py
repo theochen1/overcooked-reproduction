@@ -163,6 +163,9 @@ def resolve_interacts(
         shaped_r = shaped_r + jnp.where(can_pick_soup, soup_pickup_rew, 0.0)
 
         # Serve soup
+        # NOTE: terrain.delivery_reward is a JAX-traced field under vmap/jit;
+        #       float() would raise ConcretizationTypeError.  Use jnp.asarray.
+        delivery_rew = jnp.asarray(terrain.delivery_reward, dtype=jnp.float32)
         can_serve = (terrain_type == TERRAIN_SERVE) & (st.held_obj[player_idx] == OBJ_SOUP)
         st = st.replace(
             held_obj=st.held_obj.at[player_idx].set(jnp.where(can_serve, OBJ_NONE, st.held_obj[player_idx])),
@@ -170,7 +173,7 @@ def resolve_interacts(
                 jnp.where(can_serve, jnp.zeros((3,), dtype=jnp.int32), st.held_soup[player_idx])
             ),
         )
-        sparse_r = sparse_r + jnp.where(can_serve, float(terrain.delivery_reward), 0.0)
+        sparse_r = sparse_r + jnp.where(can_serve, delivery_rew, 0.0)
 
         # Apply only when action is INTERACT
         st = tree_util.tree_map(
