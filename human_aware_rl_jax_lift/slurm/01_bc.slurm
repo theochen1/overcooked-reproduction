@@ -26,7 +26,8 @@ fi
 echo "Task=$IDX layout=$LAYOUT split=$SPLIT | $(hostname) | $(date)"
 
 module load anaconda/2023b 2>/dev/null || true
-source activate overcooked
+eval "$(conda shell.bash hook)"
+conda activate overcooked
 export JAX_PLATFORM_NAME=cpu
 
 mkdir -p "$SLURM_SUBMIT_DIR/../logs"

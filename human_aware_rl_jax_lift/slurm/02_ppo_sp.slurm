@@ -16,15 +16,17 @@ PPO_SP_SEEDS=(2229 7649 7225 9807 386)
 
 LAYOUT=${LAYOUTS[$SLURM_ARRAY_TASK_ID]}
 echo "Task=$SLURM_ARRAY_TASK_ID layout=$LAYOUT"
-echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -1)"
 echo "Node: $(hostname) | Start: $(date)"
 
 module load anaconda/2023b 2>/dev/null || true
 module load cuda/12.1 2>/dev/null || true
-source activate overcooked
+eval "$(conda shell.bash hook)"
+conda activate overcooked
 
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
+
+echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -1)"
 
 mkdir -p "$SLURM_SUBMIT_DIR/../logs"
 cd "$SLURM_SUBMIT_DIR/.."
