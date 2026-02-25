@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=oc_ppo_sp
+#SBATCH --job-name=oc_ppo_sp_jax
 #SBATCH --account=mit_general
 #SBATCH --qos=normal
 #SBATCH --partition=mit_normal_gpu
@@ -26,7 +26,7 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 export PYTHONUNBUFFERED=1
 
 # JAX persistent compilation cache — avoids recompiling kernels on every job.
-# After the first run, subsequent jobs on the same GPU model skip the 10-15 min XLA compile.
+# After the first run, subsequent jobs on the same GPU model skip the XLA compile.
 export JAX_COMPILATION_CACHE_DIR="/home/tchen22/.cache/jax_compile_cache"
 mkdir -p "$JAX_COMPILATION_CACHE_DIR"
 
@@ -48,6 +48,7 @@ cd "$SLURM_SUBMIT_DIR/.."
 python -u scripts/train_ppo_sp.py \
     --layout    "$LAYOUT" \
     --seeds     "${PPO_SP_SEEDS[@]}" \
-    --save_dir  data/ppo_runs
+    --save_dir  data/ppo_runs \
+    --jax
 
 echo "Done: $(date)"
