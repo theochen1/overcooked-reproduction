@@ -1,5 +1,6 @@
 """PPO training utilities."""
 
+from functools import partial
 from typing import Callable
 
 import jax
@@ -9,6 +10,29 @@ from flax.training.train_state import TrainState
 
 from .config import PPOConfig
 from .model import ActorCriticCNN
+
+
+def _trunk_sq_norm(params_tree) -> jnp.ndarray:
+    p = params_tree["params"]
+    sq = jnp.array(0.0, dtype=jnp.float32)
+    for i in range(3):
+        sq = sq + jnp.sum(jnp.square(p[f"Conv_{i}"]["kernel"]))
+        sq = sq + jnp.sum(jnp.square(p[f"Conv_{i}"]["bias"]))
+        sq = sq + jnp.sum(jnp.square(p[f"Dense_{i}"]["kernel"]))
+        sq = sq + jnp.sum(jnp.square(p[f"Dense_{i}"]["bias"]))
+    return sq
+
+
+def _trunk_dot(a_tree, b_tree) -> jnp.ndarray:
+    a = a_tree["params"]
+    b = b_tree["params"]
+    dot = jnp.array(0.0, dtype=jnp.float32)
+    for i in range(3):
+        dot = dot + jnp.sum(a[f"Conv_{i}"]["kernel"] * b[f"Conv_{i}"]["kernel"])
+        dot = dot + jnp.sum(a[f"Conv_{i}"]["bias"] * b[f"Conv_{i}"]["bias"])
+        dot = dot + jnp.sum(a[f"Dense_{i}"]["kernel"] * b[f"Dense_{i}"]["kernel"])
+        dot = dot + jnp.sum(a[f"Dense_{i}"]["bias"] * b[f"Dense_{i}"]["bias"])
+    return dot
 
 
 def create_train_state(
@@ -72,7 +96,7 @@ def compute_gae(
     return adv, returns
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("normalize_advantages", "compute_trunk_grad_decomp"))
 def _ppo_update_step_jit(
     state: TrainState,
     obs: jnp.ndarray,
@@ -84,6 +108,9 @@ def _ppo_update_step_jit(
     clip_eps: float,
     vf_coef: float,
     ent_coef: float,
+    max_grad_norm: float,
+    normalize_advantages: bool,
+    compute_trunk_grad_decomp: bool,
 ):
     def loss_fn(params):
         logits, values = state.apply_fn(params, obs)
@@ -93,7 +120,12 @@ def _ppo_update_step_jit(
 
         adv_mean = advantages.mean()
         adv_std = advantages.std() + 1e-8
-        adv = (advantages - adv_mean) / adv_std
+        adv = jax.lax.cond(
+            jnp.asarray(normalize_advantages),
+            lambda a: (a - adv_mean) / adv_std,
+            lambda a: a,
+            advantages,
+        )
         pg_loss1 = -adv * ratio
         pg_loss2 = -adv * jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps)
         actor_loss = jnp.maximum(pg_loss1, pg_loss2).mean()
@@ -128,6 +160,57 @@ def _ppo_update_step_jit(
 
     old_params = state.params
     (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(old_params)
+    trunk_grad_norm_total = jnp.array(0.0, dtype=jnp.float32)
+    trunk_grad_norm_actor = jnp.array(0.0, dtype=jnp.float32)
+    trunk_grad_norm_critic = jnp.array(0.0, dtype=jnp.float32)
+    trunk_grad_cos_actor_critic = jnp.array(0.0, dtype=jnp.float32)
+    trunk_grad_actor_share_total = jnp.array(0.0, dtype=jnp.float32)
+    trunk_grad_critic_share_total = jnp.array(0.0, dtype=jnp.float32)
+    if compute_trunk_grad_decomp:
+        def actor_component_loss_fn(params):
+            logits, values = state.apply_fn(params, obs)
+            logp_all = jax.nn.log_softmax(logits)
+            logp = logp_all[jnp.arange(actions.shape[0]), actions]
+            ratio = jnp.exp(logp - old_logp)
+            adv_mean = advantages.mean()
+            adv_std = advantages.std() + 1e-8
+            adv = jax.lax.cond(
+                jnp.asarray(normalize_advantages),
+                lambda a: (a - adv_mean) / adv_std,
+                lambda a: a,
+                advantages,
+            )
+            pg_loss1 = -adv * ratio
+            pg_loss2 = -adv * jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps)
+            actor_loss = jnp.maximum(pg_loss1, pg_loss2).mean()
+            entropy = -(jax.nn.softmax(logits) * logp_all).sum(axis=-1).mean()
+            return actor_loss - ent_coef * entropy
+
+        def critic_component_loss_fn(params):
+            logits, values = state.apply_fn(params, obs)
+            _ = logits
+            v_clip = old_values + jnp.clip(values - old_values, -clip_eps, clip_eps)
+            vf_loss1 = jnp.square(values - returns)
+            vf_loss2 = jnp.square(v_clip - returns)
+            critic_loss = 0.5 * jnp.maximum(vf_loss1, vf_loss2).mean()
+            return vf_coef * critic_loss
+
+        actor_grads = jax.grad(actor_component_loss_fn)(old_params)
+        critic_grads = jax.grad(critic_component_loss_fn)(old_params)
+
+        trunk_sq_total = _trunk_sq_norm(grads)
+        trunk_sq_actor = _trunk_sq_norm(actor_grads)
+        trunk_sq_critic = _trunk_sq_norm(critic_grads)
+        trunk_dot_actor_critic = _trunk_dot(actor_grads, critic_grads)
+        trunk_grad_norm_total = jnp.sqrt(trunk_sq_total)
+        trunk_grad_norm_actor = jnp.sqrt(trunk_sq_actor)
+        trunk_grad_norm_critic = jnp.sqrt(trunk_sq_critic)
+        trunk_grad_cos_actor_critic = trunk_dot_actor_critic / (
+            trunk_grad_norm_actor * trunk_grad_norm_critic + 1e-12
+        )
+        trunk_grad_actor_share_total = trunk_grad_norm_actor / (trunk_grad_norm_total + 1e-12)
+        trunk_grad_critic_share_total = trunk_grad_norm_critic / (trunk_grad_norm_total + 1e-12)
+
     state = state.apply_gradients(grads=grads)
     delta_params = jax.tree_util.tree_map(lambda new, old: new - old, state.params, old_params)
     (
@@ -186,6 +269,8 @@ def _ppo_update_step_jit(
     )
     vf_loss_scaled = vf_coef * critic_loss
     entropy_bonus_scaled = ent_coef * entropy
+    grad_norm_global = optax.global_norm(grads)
+    grad_clip_coef = jnp.minimum(1.0, max_grad_norm / (grad_norm_global + 1e-12))
     return state, {
         "loss":         loss,
         "policy_loss":  actor_loss,   # match Baselines key names
@@ -193,7 +278,8 @@ def _ppo_update_step_jit(
         "entropy":      entropy,
         "approxkl":     approxkl,
         "clipfrac":     clipfrac,
-        "grad_norm_global": optax.global_norm(grads),
+        "grad_norm_global": grad_norm_global,
+        "grad_clip_coef": grad_clip_coef,
         "grad_norm_conv": conv_grad_norm,
         "grad_norm_dense": dense_grad_norm,
         "grad_norm_policy_head": policy_head_grad_norm,
@@ -214,6 +300,12 @@ def _ppo_update_step_jit(
         "loss_component_actor": actor_loss,
         "loss_component_value_scaled": vf_loss_scaled,
         "loss_component_entropy_scaled": entropy_bonus_scaled,
+        "trunk_grad_norm_total": trunk_grad_norm_total,
+        "trunk_grad_norm_actor": trunk_grad_norm_actor,
+        "trunk_grad_norm_critic": trunk_grad_norm_critic,
+        "trunk_grad_cos_actor_critic": trunk_grad_cos_actor_critic,
+        "trunk_grad_actor_share_total": trunk_grad_actor_share_total,
+        "trunk_grad_critic_share_total": trunk_grad_critic_share_total,
     }
 
 
@@ -226,6 +318,9 @@ def ppo_update_step(
     advantages: jnp.ndarray,
     returns: jnp.ndarray,
     config: PPOConfig,
+    *,
+    normalize_advantages: bool = True,
+    compute_trunk_grad_decomp: bool = False,
 ):
     return _ppo_update_step_jit(
         state=state,
@@ -238,4 +333,7 @@ def ppo_update_step(
         clip_eps=float(config.clip_eps),
         vf_coef=float(config.vf_coef),
         ent_coef=float(config.ent_coef),
+        max_grad_norm=float(config.max_grad_norm),
+        normalize_advantages=bool(normalize_advantages),
+        compute_trunk_grad_decomp=bool(compute_trunk_grad_decomp),
     )

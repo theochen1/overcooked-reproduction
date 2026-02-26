@@ -47,6 +47,11 @@ def main() -> None:
         action="store_true",
         help="Use V(zeros) as rollout bootstrap value (mimics TF runner bootstrap path).",
     )
+    parser.add_argument(
+        "--global_adv_norm",
+        action="store_true",
+        help="Normalize advantages once over full batch before minibatching.",
+    )
     args = parser.parse_args()
 
     overrides = get_hparams("ppo_sp", args.layout)
@@ -64,6 +69,8 @@ def main() -> None:
         cfg_kwargs["randomize_agent_idx"] = True
     if args.bootstrap_with_zero_obs:
         cfg_kwargs["bootstrap_with_zero_obs"] = True
+    if args.global_adv_norm:
+        cfg_kwargs["global_adv_norm"] = True
     cfg = PPOConfig(**cfg_kwargs)
 
     if args.jax:

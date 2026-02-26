@@ -44,6 +44,12 @@ def _delta_group_norms(var_names, pre_vals, post_vals):
     }
 
 
+def _softmax_np(logits):
+    x = logits - np.max(logits, axis=-1, keepdims=True)
+    ex = np.exp(x)
+    return ex / np.sum(ex, axis=-1, keepdims=True)
+
+
 def constfn(val):
     def f(_):
         return val
@@ -142,9 +148,10 @@ def learn(*, network, env, total_timesteps, early_stopping = False, eval_env = N
         from baselines.ppo2.model import Model
         model_fn = Model
 
+    trunk_decomp_debug = os.environ.get("TF_TRUNK_DECOMP_DEBUG", "0") == "1"
     model = model_fn(policy=policy, ob_space=ob_space, ac_space=ac_space, nbatch_act=nenvs, nbatch_train=nbatch_train,
                     nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
-                    max_grad_norm=max_grad_norm, scope=scope)
+                    max_grad_norm=max_grad_norm, scope=scope, trunk_decomp_debug=trunk_decomp_debug)
 
     if load_path is not None:
         model.load(load_path)
@@ -181,6 +188,8 @@ def learn(*, network, env, total_timesteps, early_stopping = False, eval_env = N
                 group = "other"
             print("TF_DELTA_VAR {} :: {}".format(group, name))
         print("TF_DELTA_DEBUG_VAR_NAMES_END")
+    debug_logit_probe = os.environ.get("TF_LOGIT_PROBE_DEBUG", "0") == "1"
+    probe_obs = None
     for update in range(1, nupdates+1):
         assert nbatch % nminibatches == 0, "Have {} total batch size and want {} minibatches, can't split evenly".format(nbatch, nminibatches)
         # Start timer
@@ -192,6 +201,11 @@ def learn(*, network, env, total_timesteps, early_stopping = False, eval_env = N
         cliprangenow = cliprange(frac)
         # Get minibatch
         obs, returns, masks, actions, values, neglogpacs, states, epinfos = runner.run() #pylint: disable=E0632
+        if debug_logit_probe and probe_obs is None:
+            # train_model.X has fixed leading dim nbatch_train (2000 in this setup)
+            probe_obs = obs[:nbatch_train].copy()
+        if debug_logit_probe and probe_obs is not None:
+            pre_probe_logits = model.sess.run(model.train_model.pi, {model.train_model.X: probe_obs})
         
         if eval_env is not None:
             eval_obs, eval_returns, eval_masks, eval_actions, eval_values, eval_neglogpacs, eval_states, eval_epinfos = eval_runner.run() #pylint: disable=E0632
@@ -269,6 +283,17 @@ def learn(*, network, env, total_timesteps, early_stopping = False, eval_env = N
                     rel_delta,
                     pre_param_norm,
                     post_param_norm,
+                )
+            )
+        if debug_logit_probe and probe_obs is not None:
+            post_probe_logits = model.sess.run(model.train_model.pi, {model.train_model.X: probe_obs})
+            mean_abs_logit_delta = float(np.mean(np.abs(post_probe_logits - pre_probe_logits)))
+            p_pre = _softmax_np(pre_probe_logits)
+            p_post = _softmax_np(post_probe_logits)
+            kl_pre_post = float(np.mean(np.sum(p_pre * (np.log(np.clip(p_pre, 1e-12, 1.0)) - np.log(np.clip(p_post, 1e-12, 1.0))), axis=-1)))
+            print(
+                "TF_LOGIT_PROBE update={} mean_abs_logit_delta={:.9f} kl_pre_post={:.9f}".format(
+                    update, mean_abs_logit_delta, kl_pre_post
                 )
             )
         # End timer

@@ -25,7 +25,8 @@ class Model(object):
     - Save load the model
     """
     def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
-                nsteps, ent_coef, vf_coef, max_grad_norm, scope, microbatch_size=None):
+                nsteps, ent_coef, vf_coef, max_grad_norm, scope, microbatch_size=None,
+                trunk_decomp_debug=False):
         
         self.sess = sess = get_session()
         self.scope = scope
@@ -104,6 +105,66 @@ class Model(object):
 
         raw_global_norm = tf.global_norm(grads)
 
+        # Optional diagnostics: decompose shared-trunk gradients into actor/critic parts.
+        trunk_decomp_names = []
+        trunk_decomp_tensors = []
+        if trunk_decomp_debug:
+            actor_component_loss = pg_loss - entropy * ent_coef
+            critic_component_loss = vf_loss * vf_coef
+            actor_grads = tf.gradients(actor_component_loss, params)
+            critic_grads = tf.gradients(critic_component_loss, params)
+
+            trunk_items = []
+            for v, g_tot, g_act, g_cri in zip(var, grads, actor_grads, critic_grads):
+                name = v.name
+                is_policy_head = name.endswith("/pi/w:0") or name.endswith("/pi/b:0")
+                is_value_head = name.endswith("/vf/w:0") or name.endswith("/vf/b:0")
+                is_trunk = ("/pi/" in name) and (not is_policy_head) and (not is_value_head)
+                if not is_trunk:
+                    continue
+                g_tot = tf.zeros_like(v) if g_tot is None else g_tot
+                g_act = tf.zeros_like(v) if g_act is None else g_act
+                g_cri = tf.zeros_like(v) if g_cri is None else g_cri
+                trunk_items.append((g_tot, g_act, g_cri))
+
+            if trunk_items:
+                trunk_tot_sq = tf.add_n([tf.reduce_sum(tf.square(g_tot)) for g_tot, _, _ in trunk_items])
+                trunk_act_sq = tf.add_n([tf.reduce_sum(tf.square(g_act)) for _, g_act, _ in trunk_items])
+                trunk_cri_sq = tf.add_n([tf.reduce_sum(tf.square(g_cri)) for _, _, g_cri in trunk_items])
+                trunk_dot_act_cri = tf.add_n([tf.reduce_sum(g_act * g_cri) for _, g_act, g_cri in trunk_items])
+
+                trunk_tot_norm = tf.sqrt(trunk_tot_sq)
+                trunk_act_norm = tf.sqrt(trunk_act_sq)
+                trunk_cri_norm = tf.sqrt(trunk_cri_sq)
+                trunk_cos_act_cri = trunk_dot_act_cri / (trunk_act_norm * trunk_cri_norm + 1e-12)
+                trunk_actor_share_total = trunk_act_norm / (trunk_tot_norm + 1e-12)
+                trunk_critic_share_total = trunk_cri_norm / (trunk_tot_norm + 1e-12)
+            else:
+                zero = tf.constant(0.0, dtype=tf.float32)
+                trunk_tot_norm = zero
+                trunk_act_norm = zero
+                trunk_cri_norm = zero
+                trunk_cos_act_cri = zero
+                trunk_actor_share_total = zero
+                trunk_critic_share_total = zero
+
+            trunk_decomp_names = [
+                "trunk_grad_norm_total",
+                "trunk_grad_norm_actor",
+                "trunk_grad_norm_critic",
+                "trunk_grad_cos_actor_critic",
+                "trunk_grad_actor_share_total",
+                "trunk_grad_critic_share_total",
+            ]
+            trunk_decomp_tensors = [
+                trunk_tot_norm,
+                trunk_act_norm,
+                trunk_cri_norm,
+                trunk_cos_act_cri,
+                trunk_actor_share_total,
+                trunk_critic_share_total,
+            ]
+
         if max_grad_norm is not None:
             # Clip the gradients (normalize)
             grads, _grad_norm = tf.clip_by_global_norm(grads, max_grad_norm)
@@ -115,6 +176,9 @@ class Model(object):
         self._train_op = self.trainer.apply_gradients(grads_and_var)
         self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'raw_grad_norm']
         self.stats_list = [pg_loss, vf_loss, entropy, approxkl, clipfrac, raw_global_norm]
+        if trunk_decomp_debug:
+            self.loss_names += trunk_decomp_names
+            self.stats_list += trunk_decomp_tensors
 
 
         self.train_model = train_model

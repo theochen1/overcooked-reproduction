@@ -137,6 +137,9 @@ def _run_update_epochs(
     obs_flat, actions_flat, logp_flat, values_flat, adv_flat, ret_flat,
     config: PPOConfig,
     rng: jax.Array,
+    *,
+    normalize_advantages: bool = True,
+    compute_trunk_grad_decomp: bool = False,
 ):
     """Run config.num_epochs passes; return updated train_state and mean metrics."""
     batch_size = obs_flat.shape[0]
@@ -157,6 +160,8 @@ def _run_update_epochs(
                 advantages=adv_flat[idx],
                 returns=ret_flat[idx],
                 config=config,
+                normalize_advantages=normalize_advantages,
+                compute_trunk_grad_decomp=compute_trunk_grad_decomp,
             )
             # Keep metrics as JAX arrays — NO float() here.
             all_metrics.append(metrics)
@@ -297,6 +302,7 @@ def ppo_run_jax(
         if diagnostics:
             logs.update({
                 "grad_norm_global": [],
+                "grad_clip_coef": [],
                 "grad_norm_conv": [],
                 "grad_norm_dense": [],
                 "grad_norm_policy_head": [],
@@ -321,7 +327,17 @@ def ppo_run_jax(
                 "loss_component_actor": [],
                 "loss_component_value_scaled": [],
                 "loss_component_entropy_scaled": [],
+                "probe_mean_abs_logit_delta": [],
+                "probe_kl_pre_post": [],
+                "onpolicy_kl_pre_post": [],
+                "trunk_grad_norm_total": [],
+                "trunk_grad_norm_actor": [],
+                "trunk_grad_norm_critic": [],
+                "trunk_grad_cos_actor_critic": [],
+                "trunk_grad_actor_share_total": [],
+                "trunk_grad_critic_share_total": [],
             })
+        probe_obs = None
         best_sparse = float("-inf")
         total_steps = 0
         t_start = time.time()
@@ -371,16 +387,46 @@ def ppo_run_jax(
             logp_flat    = _flatten(jnp.asarray(rollout.log_probs, dtype=jnp.float32))
             values_flat  = _flatten(jnp.asarray(rollout.values,    dtype=jnp.float32))
             adv_flat     = _flatten(jnp.asarray(adv))
+            if config.global_adv_norm:
+                adv_flat = (adv_flat - jnp.mean(adv_flat)) / (jnp.std(adv_flat) + 1e-8)
             ret_flat     = _flatten(jnp.asarray(ret))
 
             params_before_update = train_state.params
+            if diagnostics and probe_obs is None:
+                probe_size = int(min(2048, obs_flat.shape[0]))
+                probe_obs = obs_flat[:probe_size]
             rng, update_rng = jax.random.split(rng)
             train_state, mean_metrics, rng = _run_update_epochs(
                 train_state,
                 obs_flat, actions_flat, logp_flat, values_flat, adv_flat, ret_flat,
                 config, update_rng,
+                normalize_advantages=not config.global_adv_norm,
+                compute_trunk_grad_decomp=diagnostics,
             )
             mean_metrics.update(_update_delta_norms(params_before_update, train_state.params))
+            if diagnostics and probe_obs is not None:
+                logits_pre, _ = train_state.apply_fn(params_before_update, probe_obs)
+                logits_post, _ = train_state.apply_fn(train_state.params, probe_obs)
+                delta_logits = logits_post - logits_pre
+                logp_pre = jax.nn.log_softmax(logits_pre, axis=-1)
+                logp_post = jax.nn.log_softmax(logits_post, axis=-1)
+                p_pre = jnp.exp(logp_pre)
+                mean_abs_logit_delta = jnp.mean(jnp.abs(delta_logits))
+                kl_pre_post = jnp.mean(jnp.sum(p_pre * (logp_pre - logp_post), axis=-1))
+                mean_metrics["probe_mean_abs_logit_delta"] = float(mean_abs_logit_delta)
+                mean_metrics["probe_kl_pre_post"] = float(kl_pre_post)
+                # On-policy effect probe: KL on rollout observations for this update.
+                onpolicy_probe_size = int(min(4096, obs_flat.shape[0]))
+                onpolicy_obs = obs_flat[:onpolicy_probe_size]
+                onpolicy_logits_pre, _ = train_state.apply_fn(params_before_update, onpolicy_obs)
+                onpolicy_logits_post, _ = train_state.apply_fn(train_state.params, onpolicy_obs)
+                onpolicy_logp_pre = jax.nn.log_softmax(onpolicy_logits_pre, axis=-1)
+                onpolicy_logp_post = jax.nn.log_softmax(onpolicy_logits_post, axis=-1)
+                onpolicy_p_pre = jnp.exp(onpolicy_logp_pre)
+                onpolicy_kl_pre_post = jnp.mean(
+                    jnp.sum(onpolicy_p_pre * (onpolicy_logp_pre - onpolicy_logp_post), axis=-1)
+                )
+                mean_metrics["onpolicy_kl_pre_post"] = float(onpolicy_kl_pre_post)
 
             # ---- Logging -----------------------------------------------------
             t_now   = time.time()
@@ -419,6 +465,7 @@ def ppo_run_jax(
             if diagnostics:
                 for k in (
                     "grad_norm_global",
+                    "grad_clip_coef",
                     "grad_norm_conv",
                     "grad_norm_dense",
                     "grad_norm_policy_head",
@@ -443,6 +490,15 @@ def ppo_run_jax(
                     "loss_component_actor",
                     "loss_component_value_scaled",
                     "loss_component_entropy_scaled",
+                    "probe_mean_abs_logit_delta",
+                    "probe_kl_pre_post",
+                    "onpolicy_kl_pre_post",
+                    "trunk_grad_norm_total",
+                    "trunk_grad_norm_actor",
+                    "trunk_grad_norm_critic",
+                    "trunk_grad_cos_actor_critic",
+                    "trunk_grad_actor_share_total",
+                    "trunk_grad_critic_share_total",
                 ):
                     logs[k].append(float(mean_metrics.get(k, 0.0)))
 
@@ -468,6 +524,7 @@ def ppo_run_jax(
             if diagnostics:
                 _log_table({
                     "grad_norm_global": mean_metrics.get("grad_norm_global", 0.0),
+                    "grad_clip_coef": mean_metrics.get("grad_clip_coef", 0.0),
                     "grad_norm_conv": mean_metrics.get("grad_norm_conv", 0.0),
                     "grad_norm_dense": mean_metrics.get("grad_norm_dense", 0.0),
                     "grad_norm_policy_head": mean_metrics.get("grad_norm_policy_head", 0.0),
@@ -492,6 +549,15 @@ def ppo_run_jax(
                     "loss_component_actor": mean_metrics.get("loss_component_actor", 0.0),
                     "loss_component_value_scaled": mean_metrics.get("loss_component_value_scaled", 0.0),
                     "loss_component_entropy_scaled": mean_metrics.get("loss_component_entropy_scaled", 0.0),
+                    "probe_mean_abs_logit_delta": mean_metrics.get("probe_mean_abs_logit_delta", 0.0),
+                    "probe_kl_pre_post": mean_metrics.get("probe_kl_pre_post", 0.0),
+                    "onpolicy_kl_pre_post": mean_metrics.get("onpolicy_kl_pre_post", 0.0),
+                    "trunk_grad_norm_total": mean_metrics.get("trunk_grad_norm_total", 0.0),
+                    "trunk_grad_norm_actor": mean_metrics.get("trunk_grad_norm_actor", 0.0),
+                    "trunk_grad_norm_critic": mean_metrics.get("trunk_grad_norm_critic", 0.0),
+                    "trunk_grad_cos_actor_critic": mean_metrics.get("trunk_grad_cos_actor_critic", 0.0),
+                    "trunk_grad_actor_share_total": mean_metrics.get("trunk_grad_actor_share_total", 0.0),
+                    "trunk_grad_critic_share_total": mean_metrics.get("trunk_grad_critic_share_total", 0.0),
                 })
             # Anneal shaping AFTER logging (matches TF baseline order:
             # rollout → PPO update → log → update shaping for next rollout).

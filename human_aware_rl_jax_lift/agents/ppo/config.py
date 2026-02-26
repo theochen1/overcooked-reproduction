@@ -29,6 +29,7 @@ class PPOConfig:
     # Environment
     randomize_agent_idx: bool = False
     bootstrap_with_zero_obs: bool = False
+    global_adv_norm: bool = False
 
     # Network
     num_filters: int = 25
