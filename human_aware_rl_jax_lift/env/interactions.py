@@ -51,6 +51,13 @@ def resolve_interacts(
     sparse_reward = jnp.array(0.0, dtype=jnp.float32)
     shaped_reward = jnp.array(0.0, dtype=jnp.float32)
 
+    # "Nearly ready" pots: any pot with at least one item (ready + cooking +
+    # partially_full in legacy terminology).  Computed ONCE before interactions
+    # to match legacy resolve_interacts, which snapshots pot_states at the top.
+    nearly_ready_count = jnp.sum(
+        (state.pot_state[:, 0] != 0) & terrain.pot_mask
+    ).astype(jnp.int32)
+
     def _step_one_player(carry, player_idx):
         st, sparse_r, shaped_r = carry
         action = joint_action[player_idx]
@@ -93,8 +100,13 @@ def resolve_interacts(
             jnp.where(placed_soup, empty_soup, held_soup),
         )
 
+        new_ctr_obj = jnp.where(
+            can_place_on_counter,
+            held_obj,
+            jnp.where(can_pick_from_counter, OBJ_NONE, ctr_obj),
+        )
         st = st.replace(
-            counter_obj=st.counter_obj.at[ctr_idx].set(jnp.where(can_place_on_counter, held_obj, ctr_obj)),
+            counter_obj=st.counter_obj.at[ctr_idx].set(new_ctr_obj),
             counter_soup=st.counter_soup.at[ctr_idx].set(next_ctr_soup),
             held_obj=st.held_obj.at[player_idx].set(
                 jnp.where(
@@ -110,6 +122,10 @@ def resolve_interacts(
         onion_pick = (terrain_type == TERRAIN_ONION) & (st.held_obj[player_idx] == OBJ_NONE)
         tomato_pick = (terrain_type == TERRAIN_TOMATO) & (st.held_obj[player_idx] == OBJ_NONE)
         dish_pick = (terrain_type == TERRAIN_DISH) & (st.held_obj[player_idx] == OBJ_NONE)
+
+        # Count dishes held by players BEFORE this pickup (matches legacy ordering).
+        dishes_already = jnp.sum(st.held_obj == OBJ_DISH).astype(jnp.int32)
+
         st = st.replace(
             held_obj=st.held_obj.at[player_idx].set(
                 jnp.where(
@@ -119,7 +135,18 @@ def resolve_interacts(
                 )
             )
         )
-        shaped_r = shaped_r + jnp.where(dish_pick, dish_pickup_rew, 0.0)
+
+        # Legacy condition: dish pickup reward only when there are more
+        # nearly-ready pots than dishes already held AND no dishes on counters.
+        dishes_on_counters = jnp.sum(
+            (st.counter_obj == OBJ_DISH) & terrain.counter_mask
+        ).astype(jnp.int32)
+        dish_rew_eligible = (
+            dish_pick
+            & (nearly_ready_count > dishes_already)
+            & (dishes_on_counters == 0)
+        )
+        shaped_r = shaped_r + jnp.where(dish_rew_eligible, dish_pickup_rew, 0.0)
 
         # Pot interactions
         pot_idx, pot_exists = _match_position_index(terrain.pot_positions, terrain.pot_mask, interact_pos)

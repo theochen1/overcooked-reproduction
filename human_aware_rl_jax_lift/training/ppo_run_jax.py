@@ -262,14 +262,13 @@ def ppo_run_jax(
         total_steps = 0
         t_start = time.time()
 
+        # Match TF baseline: first rollout uses sf=1.0; annealing is applied
+        # AFTER each update (using total_steps at the end of the update).
+        shaping_factor = 1.0
+        sp_factor = compute_self_play_factor(0, self_play_horizon)
+
         for update in range(num_updates):
             total_steps += batch_size
-
-            # Anneal reward shaping and self-play mix
-            shaping_factor = float(
-                annealed_shaping_factor(1.0, float(rew_shaping_horizon), jnp.asarray(total_steps))
-            )
-            sp_factor = compute_self_play_factor(total_steps, self_play_horizon)
 
             rng, rollout_rng = jax.random.split(rng)
 
@@ -357,6 +356,12 @@ def ppo_run_jax(
                 "true_eprew":         ep_sparse,
                 "value_loss":         mean_metrics.get("value_loss",  0.0),
             })
+            # Anneal shaping AFTER logging (matches TF baseline order:
+            # rollout → PPO update → log → update shaping for next rollout).
+            shaping_factor = float(
+                annealed_shaping_factor(1.0, float(rew_shaping_horizon), jnp.asarray(total_steps))
+            )
+            sp_factor = compute_self_play_factor(total_steps, self_play_horizon)
             print(f"Current reward shaping {shaping_factor:.4f}")
 
             if ep_sparse > best_sparse:
