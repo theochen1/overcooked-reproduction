@@ -181,10 +181,36 @@ def make_rollout_fn(
                 train_state, bstate, obs0, sf, spf, rng
             )
 
-        # Episode-level stats: average over envs of non-zero dones
-        # (sparse reward at done steps is a proxy; full ep accumulation
-        # requires state carry — see ep_sparse_accum in BatchedEnvState)
-        ep_sparse_mean = float(jnp.mean(sparse_t))  # cheap scalar
+        # -------------------------------------------------------------------
+        # Episode stats (match legacy runner.py semantics)
+        # - Legacy logs mean over completed episodes of total return "episode['r']"
+        # - Here we reconstruct episode returns by accumulating reward until done.
+        # -------------------------------------------------------------------
+        dones_f = dones_t.astype(jnp.float32)
+
+        def _acc_step(carry, x):
+            acc_r, acc_sr = carry
+            r, sr, d = x
+            acc_r = acc_r + r
+            acc_sr = acc_sr + sr
+            ep_r = jnp.where(d > 0.0, acc_r, 0.0)
+            ep_sr = jnp.where(d > 0.0, acc_sr, 0.0)
+            acc_r = jnp.where(d > 0.0, 0.0, acc_r)
+            acc_sr = jnp.where(d > 0.0, 0.0, acc_sr)
+            return (acc_r, acc_sr), (ep_r, ep_sr)
+
+        (_, _), (ep_r_t, ep_sr_t) = jax.lax.scan(
+            _acc_step,
+            init=(
+                jnp.zeros((num_envs,), dtype=rewards_t.dtype),
+                jnp.zeros((num_envs,), dtype=sparse_t.dtype),
+            ),
+            xs=(rewards_t, sparse_t, dones_f),
+        )
+
+        episodes = jnp.sum(dones_f)
+        eprewmean = jnp.where(episodes > 0.0, jnp.sum(ep_r_t) / episodes, 0.0)
+        ep_sparse_mean = jnp.where(episodes > 0.0, jnp.sum(ep_sr_t) / episodes, 0.0)
 
         batch = RolloutBatch(
             obs=obs_t,
@@ -196,9 +222,9 @@ def make_rollout_fn(
             next_value=next_value,
             sparse_rewards=sparse_t,
             infos={
-                "eprewmean": float(jnp.mean(rewards_t)),
-                "ep_sparse_rew_mean": ep_sparse_mean,
-                "episodes_this_rollout": int(jnp.sum(dones_t)),
+                "eprewmean": float(eprewmean),
+                "ep_sparse_rew_mean": float(ep_sparse_mean),
+                "episodes_this_rollout": int(np.asarray(episodes)),
             },
         )
         return batch, final_bstate, final_obs0
