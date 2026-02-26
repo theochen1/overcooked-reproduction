@@ -91,16 +91,17 @@ def _single_step(
     actions_if_1 = jnp.stack([other_action, training_action])   # [oa, ta]
     joint = jnp.where(agent_idx == 0, actions_if_0, actions_if_1).astype(jnp.int32)
 
-    next_state, sparse, shaped, _ = env_step(
+    next_state, sparse, shaped, info = env_step(
         terrain, state, joint, shaping_factor=shaping_factor
     )
+    shaped_unscaled = info["shaped_r_unscaled"]
     reward = sparse + shaped
     done = (next_state.timestep >= jnp.array(horizon, dtype=jnp.int32)).astype(jnp.float32)
     done_b = done.astype(jnp.bool_)
 
     # Accumulate episode rewards; reset on done.
     new_ep_sparse = jnp.where(done_b, 0.0, ep_sparse + sparse)
-    new_ep_shaped = jnp.where(done_b, 0.0, ep_shaped + shaped)
+    new_ep_shaped = jnp.where(done_b, 0.0, ep_shaped + shaped_unscaled)
 
     # Reset env state on episode end; otherwise timesteps keep increasing and
     # done stays permanently true after the first episode.

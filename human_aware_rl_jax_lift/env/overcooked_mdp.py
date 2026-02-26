@@ -95,18 +95,26 @@ def step(
     else:
         sf = jnp.array(1.0)
 
-    st, sparse_reward, shaped_reward = resolve_interacts(
+    # Compute legacy dense reward in *unscaled* units first, then apply shaping
+    # factor to the training reward path. This preserves TF logging contract:
+    # - ep_sparse_r: unscaled sparse
+    # - ep_shaped_r: unscaled dense
+    # - episode["r"]: sparse + dense * shaping_factor
+    st, sparse_reward, shaped_unscaled = resolve_interacts(
         terrain=terrain,
         state=state,
         joint_action=joint_action.astype(jnp.int32),
-        placement_in_pot_rew=_BASE_PLACEMENT_REW * sf,
-        dish_pickup_rew=_BASE_DISH_REW * sf,
-        soup_pickup_rew=_BASE_SOUP_REW * sf,
+        placement_in_pot_rew=_BASE_PLACEMENT_REW,
+        dish_pickup_rew=_BASE_DISH_REW,
+        soup_pickup_rew=_BASE_SOUP_REW,
     )
+    shaped_reward = shaped_unscaled * sf
     st = _resolve_movement(terrain, st, joint_action.astype(jnp.int32))
     st = _step_environment_effects(terrain, st)
     st = st.replace(timestep=st.timestep + jnp.array(1, dtype=jnp.int32))
     info = {
         "shaped_r_by_agent": jnp.array([shaped_reward, shaped_reward], dtype=jnp.float32),
+        "shaped_r_unscaled": shaped_unscaled.astype(jnp.float32),
+        "shaping_factor": sf.astype(jnp.float32),
     }
     return st, sparse_reward.astype(jnp.float32), shaped_reward.astype(jnp.float32), info

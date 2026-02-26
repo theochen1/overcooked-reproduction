@@ -60,6 +60,13 @@ class VectorizedEnv:
             return np.zeros((self.num_envs,), dtype=np.int32)
         return np.random.randint(0, 2, size=(self.num_envs,), dtype=np.int32)
 
+    def _current_shaping_factor(self) -> float:
+        """Infer current scalar shaping factor from PLACEMENT_IN_POT_REW."""
+        if not self.reward_shaping_params:
+            return 1.0
+        base = 3.0
+        return float(self.reward_shaping_params.get("PLACEMENT_IN_POT_REW", base)) / base
+
     def _encode_for_agent_idx(self, state: OvercookedState, idx: int) -> Tuple[np.ndarray, np.ndarray]:
         p0_obs, p1_obs = lossless_state_encoding_20(self.terrain, state)
         if int(idx) == 0:
@@ -110,15 +117,17 @@ class VectorizedEnv:
             self.states[i] = next_state
 
             sparse_f = float(sparse)
-            shaped_f = float(shaped)
-            rew_f = sparse_f + shaped_f
+            shaped_scaled_f = float(shaped)
+            shaped_unscaled_f = float(info.get("shaped_r_unscaled", shaped_scaled_f))
+            sf = float(info.get("shaping_factor", self._current_shaping_factor()))
+            rew_f = sparse_f + shaped_scaled_f
             self.ep_sparse_accum[i] += sparse_f
-            self.ep_shaped_accum[i] += shaped_f
+            self.ep_shaped_accum[i] += shaped_unscaled_f
 
             done = int(next_state.timestep) >= self.horizon
             if done:
                 ep_info = {
-                    "r": float(self.ep_sparse_accum[i] + self.ep_shaped_accum[i]),
+                    "r": float(self.ep_sparse_accum[i] + self.ep_shaped_accum[i] * sf),
                     "ep_sparse_r": float(self.ep_sparse_accum[i]),
                     "ep_shaped_r": float(self.ep_shaped_accum[i]),
                 }
@@ -126,14 +135,16 @@ class VectorizedEnv:
                 o0, o1 = self._reset_single(i)
                 info_out = {
                     "episode": ep_info,
-                    "shaped_r": shaped_f,
+                    "shaped_r": shaped_unscaled_f,
+                    "shaped_r_scaled": shaped_scaled_f,
                     "sparse_r": sparse_f,
                     "shaped_r_by_agent": np.asarray(info["shaped_r_by_agent"]),
                 }
             else:
                 o0, o1 = self._encode_for_agent_idx(self.states[i], int(self.agent_idx[i]))
                 info_out = {
-                    "shaped_r": shaped_f,
+                    "shaped_r": shaped_unscaled_f,
+                    "shaped_r_scaled": shaped_scaled_f,
                     "sparse_r": sparse_f,
                     "shaped_r_by_agent": np.asarray(info["shaped_r_by_agent"]),
                 }
