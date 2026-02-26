@@ -10,11 +10,15 @@ Run with:
 import numpy as np
 import pytest
 
+jax = pytest.importorskip("jax")
 jnp = pytest.importorskip("jax.numpy")
 
 from human_aware_rl_jax_lift.env.compat import from_legacy_state
 from human_aware_rl_jax_lift.env.layouts import parse_layout
 from human_aware_rl_jax_lift.env.overcooked_mdp import step as jax_step
+from human_aware_rl_jax_lift.env.state import make_initial_state
+from human_aware_rl_jax_lift.agents.ppo.train import compute_gae
+from human_aware_rl_jax_lift.training.vec_env_jax import batched_step, encode_obs, make_batched_state
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +79,7 @@ def _get_index_to_action():
 
 LAYOUTS = ["simple", "unident_s", "random1", "random3"]
 N_RANDOM_STEPS = 400  # full episode length
+N_MULTI_EPISODE_STEPS = 1200  # 3 full episodes
 
 
 @pytest.mark.parametrize("layout", LAYOUTS)
@@ -133,6 +138,78 @@ def test_step_parity_random_sequence(layout):
         f"Cumulative shaped mismatch over {N_RANDOM_STEPS} steps: "
         f"jax={cum_shaped_jax}  legacy={cum_shaped_legacy}"
     )
+
+
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_multi_episode_reset_parity(layout):
+    """Run 3 episodes and validate reset-boundary parity with vec_env_jax.
+
+    This directly checks whether JAX reset behavior matches legacy semantics:
+    the step that reaches horizon emits done=1 and returns the *reset* state/obs.
+    """
+    terrain = parse_layout(layout)
+    mdp = _make_legacy_mdp(layout)
+    legacy_state = mdp.get_standard_start_state()
+    legacy_start_as_jax = from_legacy_state(terrain, legacy_state)
+
+    # Single-env batched state for exact reset semantics parity.
+    rng = jax.random.PRNGKey(0)
+    bstate = make_batched_state(terrain, 1, rng)
+    obs0, _ = encode_obs(terrain, bstate)
+    get_state0 = lambda s: jax.tree_util.tree_map(lambda x: x[0], s)
+
+    # Ensure both stacks start identically.
+    _assert_state_equal(get_state0(bstate.states), legacy_start_as_jax, step_idx=0)
+
+    np_rng = np.random.RandomState(7)
+    idx_to_act = _get_index_to_action()
+    horizon = 400
+    sf = jnp.array(1.0, dtype=jnp.float32)
+
+    for t in range(N_MULTI_EPISODE_STEPS):
+        a0_idx, a1_idx = np_rng.randint(0, 6, size=2)
+        joint_action = (idx_to_act[a0_idx], idx_to_act[a1_idx])
+        ta = jnp.array([a0_idx], dtype=jnp.int32)
+        oa = jnp.array([a1_idx], dtype=jnp.int32)
+        reset_key = jax.random.fold_in(rng, t)[None, :]
+
+        legacy_next, legacy_sparse, legacy_shaped = mdp.get_state_transition(
+            legacy_state, joint_action
+        )
+        bstate, obs0, _obs1, rewards, dones, sparse_r = batched_step(
+            terrain, bstate, ta, oa, reset_key, sf, horizon
+        )
+
+        done = bool(np.asarray(dones[0]))
+        is_boundary = ((t + 1) % horizon == 0)
+        assert done == is_boundary, (
+            f"Step {t}: done mismatch got={done} expected={is_boundary}"
+        )
+
+        j_sparse = float(np.asarray(sparse_r[0]))
+        j_shaped = float(np.asarray(rewards[0] - sparse_r[0]))
+        assert j_sparse == float(legacy_sparse), (
+            f"Step {t}: sparse mismatch jax={j_sparse} legacy={float(legacy_sparse)}"
+        )
+        assert j_shaped == float(legacy_shaped), (
+            f"Step {t}: shaped mismatch jax={j_shaped} legacy={float(legacy_shaped)}"
+        )
+
+        if done:
+            # On boundary step, vec_env_jax should emit already-reset state.
+            reset_legacy = mdp.get_standard_start_state()
+            reset_legacy_as_jax = from_legacy_state(terrain, reset_legacy)
+            _assert_state_equal(get_state0(bstate.states), reset_legacy_as_jax, step_idx=t)
+            # Obs should also match reset state encoding exactly.
+            exp_o0, _exp_o1 = encode_obs(terrain, bstate)
+            assert np.array_equal(np.asarray(obs0), np.asarray(exp_o0)), (
+                f"Step {t}: reset obs mismatch"
+            )
+            legacy_state = reset_legacy
+        else:
+            legacy_next_as_jax = from_legacy_state(terrain, legacy_next)
+            _assert_state_equal(get_state0(bstate.states), legacy_next_as_jax, step_idx=t)
+            legacy_state = legacy_next
 
 
 # ---------------------------------------------------------------------------
@@ -345,3 +422,82 @@ def test_reward_accounting_audit():
 
     assert cum_sparse_l == cum_sparse_j, f"Sparse mismatch: legacy={cum_sparse_l} jax={cum_sparse_j}"
     assert cum_shaped_l == cum_shaped_j, f"Shaped mismatch: legacy={cum_shaped_l} jax={cum_shaped_j}"
+
+
+def test_reward_pipeline_rollout_and_gae_parity():
+    """Audit per-step reward stream + episode stats + GAE inputs on one rollout."""
+    layout = "simple"
+    terrain = parse_layout(layout)
+    mdp = _make_legacy_mdp(layout)
+
+    # Single-env rollout for exact stream comparison.
+    legacy_state = mdp.get_standard_start_state()
+    rng = np.random.RandomState(123)
+    idx_to_act = _get_index_to_action()
+    horizon = 400
+
+    jax_rng = jax.random.PRNGKey(0)
+    bstate = make_batched_state(terrain, 1, jax_rng)
+    sf = jnp.array(1.0, dtype=jnp.float32)
+
+    rewards_j, sparse_j, dones_j = [], [], []
+    rewards_l, sparse_l, dones_l = [], [], []
+    for t in range(horizon):
+        a0_idx, a1_idx = rng.randint(0, 6, size=2)
+        ta = jnp.array([a0_idx], dtype=jnp.int32)
+        oa = jnp.array([a1_idx], dtype=jnp.int32)
+        joint_action = (idx_to_act[a0_idx], idx_to_act[a1_idx])
+        reset_key = jax.random.fold_in(jax_rng, t)[None, :]
+
+        legacy_next, l_sparse, l_shaped = mdp.get_state_transition(legacy_state, joint_action)
+        bstate, _obs0, _obs1, j_rew, j_done, j_sparse = batched_step(
+            terrain, bstate, ta, oa, reset_key, sf, horizon
+        )
+        j_rew_f = float(np.asarray(j_rew[0]))
+        j_sparse_f = float(np.asarray(j_sparse[0]))
+        j_done_f = float(np.asarray(j_done[0]))
+
+        rewards_j.append(j_rew_f)
+        sparse_j.append(j_sparse_f)
+        dones_j.append(j_done_f)
+
+        rewards_l.append(float(l_sparse + l_shaped))
+        sparse_l.append(float(l_sparse))
+        dones_l.append(1.0 if (t == horizon - 1) else 0.0)
+
+        legacy_state = legacy_next if t < horizon - 1 else mdp.get_standard_start_state()
+
+    assert np.allclose(rewards_j, rewards_l), "Per-step total reward stream mismatch"
+    assert np.allclose(sparse_j, sparse_l), "Per-step sparse reward stream mismatch"
+    assert np.allclose(dones_j, dones_l), "Done mask mismatch"
+
+    # Episode stats parity (same semantics as runner_jax aggregate logic).
+    assert sum(dones_j) == 1.0, "Expected exactly one completed episode in horizon rollout"
+    ep_total_j = float(sum(rewards_j))
+    ep_total_l = float(sum(rewards_l))
+    ep_sparse_j = float(sum(sparse_j))
+    ep_sparse_l = float(sum(sparse_l))
+    assert ep_total_j == ep_total_l, "episode['r'] mismatch"
+    assert ep_sparse_j == ep_sparse_l, "episode['ep_sparse_r'] mismatch"
+
+    # GAE audit: with identical (rewards, dones, values, bootstrap), outputs must match.
+    values = rng.randn(horizon, 1).astype(np.float32)
+    bootstrap = np.zeros((1,), dtype=np.float32)  # rollout ends on done
+    adv_j, ret_j = compute_gae(
+        jnp.asarray(np.array(rewards_j, dtype=np.float32)[:, None]),
+        jnp.asarray(values),
+        jnp.asarray(np.array(dones_j, dtype=np.float32)[:, None]),
+        gamma=0.99,
+        lam=0.98,
+        bootstrap_value=jnp.asarray(bootstrap),
+    )
+    adv_l, ret_l = compute_gae(
+        jnp.asarray(np.array(rewards_l, dtype=np.float32)[:, None]),
+        jnp.asarray(values),
+        jnp.asarray(np.array(dones_l, dtype=np.float32)[:, None]),
+        gamma=0.99,
+        lam=0.98,
+        bootstrap_value=jnp.asarray(bootstrap),
+    )
+    assert np.allclose(np.asarray(adv_j), np.asarray(adv_l)), "GAE advantages mismatch"
+    assert np.allclose(np.asarray(ret_j), np.asarray(ret_l)), "GAE returns mismatch"

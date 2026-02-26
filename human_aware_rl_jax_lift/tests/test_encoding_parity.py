@@ -4,6 +4,7 @@ import pytest
 from human_aware_rl_jax_lift.env.compat import from_legacy_state
 from human_aware_rl_jax_lift.encoding.ppo_masks import lossless_state_encoding_20
 from human_aware_rl_jax_lift.env.layouts import parse_layout
+from human_aware_rl_jax_lift.env.state import make_initial_state
 
 
 def _get_mdp_and_terrain(layout="simple"):
@@ -84,3 +85,25 @@ def test_encoding_all_layouts():
         mdp, terrain, _, _ = _get_mdp_and_terrain(layout)
         state = mdp.get_standard_start_state()
         _assert_encoding_equal(terrain, state, mdp)
+
+
+def test_start_state_encoding_matches_legacy_reset():
+    """Ensure fresh JAX resets produce identical observations to legacy TF."""
+    for layout in ("simple", "unident_s", "random1", "random0", "random3"):
+        mdp, terrain, _, _ = _get_mdp_and_terrain(layout)
+        legacy_state = mdp.get_standard_start_state()
+        jax_state = make_initial_state(terrain)
+
+        legacy_from_jax = from_legacy_state(terrain, legacy_state)
+        assert np.array_equal(
+            np.asarray(jax_state.player_or), np.asarray(legacy_from_jax.player_or)
+        ), f"{layout}: start orientation mismatch"
+
+        jax_o0, jax_o1 = lossless_state_encoding_20(terrain, jax_state)
+        legacy_o0, legacy_o1 = mdp.lossless_state_encoding(legacy_state)
+        assert np.array_equal(np.asarray(jax_o0), np.asarray(legacy_o0)), (
+            f"{layout}: player-0 start obs mismatch"
+        )
+        assert np.array_equal(np.asarray(jax_o1), np.asarray(legacy_o1)), (
+            f"{layout}: player-1 start obs mismatch"
+        )

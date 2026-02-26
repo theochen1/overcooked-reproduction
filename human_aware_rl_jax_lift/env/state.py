@@ -101,7 +101,8 @@ def make_initial_state(terrain: Terrain) -> OvercookedState:
 
     return OvercookedState(
         player_pos=terrain.player_start.astype(jnp.int32),
-        player_or=jnp.array([1, 1], dtype=jnp.int32),  # SOUTH by legacy default
+        # Legacy TF default start orientation is NORTH for both players.
+        player_or=jnp.array([0, 0], dtype=jnp.int32),
         held_obj=jnp.zeros((2,), dtype=jnp.int32),
         held_soup=jnp.zeros((2, 3), dtype=jnp.int32),
         pot_state=jnp.zeros((max_pots, 3), dtype=jnp.int32),
