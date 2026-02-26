@@ -31,14 +31,16 @@ def _assert_encoding_equal(terrain, legacy_state, mdp):
 
 def test_encoding_with_onions_in_pot():
     mdp, terrain, Action, _ = _get_mdp_and_terrain("simple")
+    Direction = Action  # Direction constants are accessed via Action.ALL_ACTIONS
+    from overcooked_ai_py.mdp.actions import Direction
     state = mdp.get_standard_start_state()
     actions = [
-        (Action.NORTH, Action.STAY),
-        (Action.WEST, Action.STAY),
+        (Direction.NORTH, Action.STAY),
+        (Direction.WEST, Action.STAY),
         (Action.INTERACT, Action.STAY),  # pick onion
-        (Action.EAST, Action.STAY),
-        (Action.EAST, Action.STAY),
-        (Action.NORTH, Action.STAY),
+        (Direction.EAST, Action.STAY),
+        (Direction.EAST, Action.STAY),
+        (Direction.NORTH, Action.STAY),
         (Action.INTERACT, Action.STAY),  # place onion in pot
     ]
     for a in actions:
@@ -66,7 +68,7 @@ def test_encoding_held_soup():
     jax_state = from_legacy_state(terrain, state)
     jax_o0, _ = lossless_state_encoding_20(terrain, jax_state)
     p0x, p0y = np.asarray(jax_state.player_pos[0]).tolist()
-    assert int(np.asarray(jax_o0)[p0y, p0x, 17]) == 1
+    assert int(np.asarray(jax_o0)[p0x, p0y, 17]) == 1
 
 
 def test_encoding_counter_object():

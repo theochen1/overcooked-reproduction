@@ -26,6 +26,10 @@ class PPOConfig:
     other_agent_type: str = "sp"
     layout_name: str = "simple"
 
+    # Environment
+    randomize_agent_idx: bool = False
+    bootstrap_with_zero_obs: bool = False
+
     # Network
     num_filters: int = 25
     hidden_dim: int = 32

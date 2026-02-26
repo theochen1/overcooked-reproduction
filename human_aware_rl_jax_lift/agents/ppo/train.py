@@ -91,7 +91,9 @@ def _ppo_update_step_jit(
         logp = logp_all[jnp.arange(actions.shape[0]), actions]
         ratio = jnp.exp(logp - old_logp)
 
-        adv = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        adv_mean = advantages.mean()
+        adv_std = advantages.std() + 1e-8
+        adv = (advantages - adv_mean) / adv_std
         pg_loss1 = -adv * ratio
         pg_loss2 = -adv * jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps)
         actor_loss = jnp.maximum(pg_loss1, pg_loss2).mean()
@@ -108,11 +110,82 @@ def _ppo_update_step_jit(
         approxkl  = 0.5 * jnp.mean(jnp.square(old_logp - logp))
         clipfrac  = jnp.mean((jnp.abs(ratio - 1.0) > clip_eps).astype(jnp.float32))
 
-        return loss, (actor_loss, critic_loss, entropy, approxkl, clipfrac)
+        return loss, (
+            actor_loss,
+            critic_loss,
+            entropy,
+            approxkl,
+            clipfrac,
+            adv_mean,
+            adv_std,
+            advantages.min(),
+            advantages.max(),
+            adv.mean(),
+            adv.std(),
+            adv.min(),
+            adv.max(),
+        )
 
-    (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+    old_params = state.params
+    (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(old_params)
     state = state.apply_gradients(grads=grads)
-    actor_loss, critic_loss, entropy, approxkl, clipfrac = aux
+    delta_params = jax.tree_util.tree_map(lambda new, old: new - old, state.params, old_params)
+    (
+        actor_loss,
+        critic_loss,
+        entropy,
+        approxkl,
+        clipfrac,
+        adv_mean,
+        adv_std,
+        adv_min,
+        adv_max,
+        adv_norm_mean,
+        adv_norm_std,
+        adv_norm_min,
+        adv_norm_max,
+    ) = aux
+    params_grads = grads["params"]
+    conv_grad_norm = jnp.sqrt(sum(
+        jnp.sum(jnp.square(params_grads[f"Conv_{i}"]["kernel"])) +
+        jnp.sum(jnp.square(params_grads[f"Conv_{i}"]["bias"]))
+        for i in range(3)
+    ))
+    dense_grad_norm = jnp.sqrt(sum(
+        jnp.sum(jnp.square(params_grads[f"Dense_{i}"]["kernel"])) +
+        jnp.sum(jnp.square(params_grads[f"Dense_{i}"]["bias"]))
+        for i in range(3)
+    ))
+    policy_head_grad_norm = jnp.sqrt(
+        jnp.sum(jnp.square(params_grads["Dense_3"]["kernel"])) +
+        jnp.sum(jnp.square(params_grads["Dense_3"]["bias"]))
+    )
+    value_head_grad_norm = jnp.sqrt(
+        jnp.sum(jnp.square(params_grads["Dense_4"]["kernel"])) +
+        jnp.sum(jnp.square(params_grads["Dense_4"]["bias"]))
+    )
+    params_delta = delta_params["params"]
+    delta_norm_global = optax.global_norm(delta_params)
+    conv_delta_norm = jnp.sqrt(sum(
+        jnp.sum(jnp.square(params_delta[f"Conv_{i}"]["kernel"])) +
+        jnp.sum(jnp.square(params_delta[f"Conv_{i}"]["bias"]))
+        for i in range(3)
+    ))
+    dense_delta_norm = jnp.sqrt(sum(
+        jnp.sum(jnp.square(params_delta[f"Dense_{i}"]["kernel"])) +
+        jnp.sum(jnp.square(params_delta[f"Dense_{i}"]["bias"]))
+        for i in range(3)
+    ))
+    policy_head_delta_norm = jnp.sqrt(
+        jnp.sum(jnp.square(params_delta["Dense_3"]["kernel"])) +
+        jnp.sum(jnp.square(params_delta["Dense_3"]["bias"]))
+    )
+    value_head_delta_norm = jnp.sqrt(
+        jnp.sum(jnp.square(params_delta["Dense_4"]["kernel"])) +
+        jnp.sum(jnp.square(params_delta["Dense_4"]["bias"]))
+    )
+    vf_loss_scaled = vf_coef * critic_loss
+    entropy_bonus_scaled = ent_coef * entropy
     return state, {
         "loss":         loss,
         "policy_loss":  actor_loss,   # match Baselines key names
@@ -120,6 +193,27 @@ def _ppo_update_step_jit(
         "entropy":      entropy,
         "approxkl":     approxkl,
         "clipfrac":     clipfrac,
+        "grad_norm_global": optax.global_norm(grads),
+        "grad_norm_conv": conv_grad_norm,
+        "grad_norm_dense": dense_grad_norm,
+        "grad_norm_policy_head": policy_head_grad_norm,
+        "grad_norm_value_head": value_head_grad_norm,
+        "delta_norm_global": delta_norm_global,
+        "delta_norm_conv": conv_delta_norm,
+        "delta_norm_dense": dense_delta_norm,
+        "delta_norm_policy_head": policy_head_delta_norm,
+        "delta_norm_value_head": value_head_delta_norm,
+        "adv_mean": adv_mean,
+        "adv_std": adv_std,
+        "adv_min": adv_min,
+        "adv_max": adv_max,
+        "adv_norm_mean": adv_norm_mean,
+        "adv_norm_std": adv_norm_std,
+        "adv_norm_min": adv_norm_min,
+        "adv_norm_max": adv_norm_max,
+        "loss_component_actor": actor_loss,
+        "loss_component_value_scaled": vf_loss_scaled,
+        "loss_component_entropy_scaled": entropy_bonus_scaled,
     }
 
 

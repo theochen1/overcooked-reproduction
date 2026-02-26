@@ -75,6 +75,9 @@ def make_rollout_fn(
     terrain: Terrain,
     horizon: int,
     num_envs: int,
+    *,
+    randomize_agent_idx: bool = False,
+    bootstrap_with_zero_obs: bool = False,
 ):
     """
     Return a JIT-compiled function::
@@ -132,6 +135,7 @@ def make_rollout_fn(
                 shaping_factor,
                 horizon,
                 player_order_actions=False,
+                randomize_agent_idx=randomize_agent_idx,
             )
 
             transition = (obs0, actions, rewards, dones, values, logp, sparse_r)
@@ -155,7 +159,8 @@ def make_rollout_fn(
         # obs_t: [T, N, H, W, C], etc.
 
         # Bootstrap value for GAE
-        _, next_values = train_state.apply_fn(train_state.params, final_obs0)
+        bootstrap_obs = jnp.zeros_like(final_obs0) if bootstrap_with_zero_obs else final_obs0
+        _, next_values = train_state.apply_fn(train_state.params, bootstrap_obs)
         next_value = _value_to_1d(next_values, name="next_values")  # [N]
 
         return (
@@ -212,6 +217,11 @@ def make_rollout_fn(
         episodes = jnp.sum(dones_f)
         eprewmean = jnp.where(episodes > 0.0, jnp.sum(ep_r_t) / episodes, 0.0)
         ep_sparse_mean = jnp.where(episodes > 0.0, jnp.sum(ep_sr_t) / episodes, 0.0)
+        dones_np = np.asarray(dones_f)
+        ep_r_np = np.asarray(ep_r_t)
+        ep_sr_np = np.asarray(ep_sr_t)
+        completed_eprew = ep_r_np[dones_np > 0.0]
+        completed_sparse = ep_sr_np[dones_np > 0.0]
 
         batch = RolloutBatch(
             obs=obs_t,
@@ -226,6 +236,8 @@ def make_rollout_fn(
                 "eprewmean": float(eprewmean),
                 "ep_sparse_rew_mean": float(ep_sparse_mean),
                 "episodes_this_rollout": int(np.asarray(episodes)),
+                "completed_eprew": completed_eprew,
+                "completed_ep_sparse_rew": completed_sparse,
             },
         )
         return batch, final_bstate, final_obs0

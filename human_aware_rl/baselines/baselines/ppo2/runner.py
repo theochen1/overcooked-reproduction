@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 from baselines.common.runners import AbstractEnvRunner
 
@@ -147,6 +149,23 @@ class Runner(AbstractEnvRunner):
         mb_neglogpacs = np.asarray(mb_neglogpacs, dtype=np.float32)
         mb_dones = np.asarray(mb_dones, dtype=np.bool)
         last_values = self.model.value(self.obs, S=self.states, M=self.dones)
+        if overcooked and os.environ.get("TF_OVERCOOKED_DEBUG_BOOTSTRAP", "0") == "1":
+            last_values_obs0 = self.model.value(self.obs0, S=self.states, M=self.dones)
+            dones_f = np.asarray(self.dones, dtype=np.float32)
+            print(
+                "TF_BOOTSTRAP_DEBUG "
+                "done_mean={:.6f} done_false_count={} "
+                "obs_abs_mean={:.6f} obs0_abs_mean={:.6f} "
+                "v_obs_mean={:.6f} v_obs0_mean={:.6f} v_l2_diff={:.6f}".format(
+                    float(np.mean(dones_f)),
+                    int(np.sum(dones_f < 0.5)),
+                    float(np.mean(np.abs(self.obs))),
+                    float(np.mean(np.abs(self.obs0))),
+                    float(np.mean(last_values)),
+                    float(np.mean(last_values_obs0)),
+                    float(np.sqrt(np.mean(np.square(last_values - last_values_obs0)))),
+                )
+            )
 
         # discount/bootstrap off value fn
         mb_returns = np.zeros_like(mb_rewards)

@@ -15,7 +15,9 @@ def _make_layer(shape, positions: jnp.ndarray, values: jnp.ndarray) -> jnp.ndarr
     layer = jnp.zeros(shape, dtype=jnp.int32)
     xs = positions[:, 0]
     ys = positions[:, 1]
-    return layer.at[xs, ys].set(values)
+    # Use additive scatter to avoid padded (0,0) entries with value 0
+    # overwriting a real non-zero feature that may also live at (0,0).
+    return layer.at[xs, ys].add(values)
 
 
 def _player_orientation_layer(
@@ -37,7 +39,15 @@ def _object_layer_from_sources(
     player_pos: jnp.ndarray,
     held_obj: jnp.ndarray,
 ):
-    counter_vals = (counter_mask & (counter_obj == obj_id)).astype(jnp.int32)
+    # Replicate TF legacy dict.update bug: when any player holds an object of
+    # this type, all_objects_by_type overwrites unowned objects with player
+    # objects, effectively dropping counter objects of the same type.
+    any_player_holds = jnp.any(held_obj == obj_id)
+    counter_vals = jnp.where(
+        any_player_holds,
+        jnp.zeros_like(counter_mask, dtype=jnp.int32),
+        (counter_mask & (counter_obj == obj_id)).astype(jnp.int32),
+    )
     counter_layer = _make_layer(shape, counter_positions, counter_vals)
     player_vals = (held_obj == obj_id).astype(jnp.int32)
     player_layer = _make_layer(shape, player_pos, player_vals)
@@ -78,8 +88,18 @@ def lossless_state_encoding_20(terrain: Terrain, state: OvercookedState):
         layers.append(_make_layer(shape, terrain.serve_positions, serve_vals))
 
         # 16 onions_in_pot, 17 onions_cook_time
-        onion_count = state.pot_state[:, 1] * terrain.pot_mask.astype(jnp.int32)
-        cook_time = state.pot_state[:, 2] * terrain.pot_mask.astype(jnp.int32)
+        # Replicate TF legacy dict.update bug: when any player holds a soup,
+        # all_objects_by_type drops pot soup objects, zeroing these channels.
+        any_holds_soup = jnp.any(state.held_obj == OBJ_SOUP)
+        pot_mask_i = terrain.pot_mask.astype(jnp.int32)
+        onion_count = jnp.where(
+            any_holds_soup, jnp.zeros_like(state.pot_state[:, 1]),
+            state.pot_state[:, 1],
+        ) * pot_mask_i
+        cook_time = jnp.where(
+            any_holds_soup, jnp.zeros_like(state.pot_state[:, 2]),
+            state.pot_state[:, 2],
+        ) * pot_mask_i
         layers.append(_make_layer(shape, terrain.pot_positions, onion_count))
         layers.append(_make_layer(shape, terrain.pot_positions, cook_time))
 

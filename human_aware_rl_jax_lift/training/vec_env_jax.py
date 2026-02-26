@@ -41,12 +41,19 @@ class BatchedEnvState:
     ep_shaped_accum: jnp.ndarray   # [N] float32
 
 
-def make_batched_state(terrain: Terrain, num_envs: int, rng: jax.Array) -> BatchedEnvState:
+def make_batched_state(
+    terrain: Terrain,
+    num_envs: int,
+    rng: jax.Array,
+    *,
+    randomize_agent_idx: bool = False,
+) -> BatchedEnvState:
     """Construct a BatchedEnvState with N independent initial states."""
-    # vmap over a dummy index array — all envs start with the same initial
-    # geometry but different RNG keys for agent_idx assignment.
     init_states = jax.vmap(lambda _: make_initial_state(terrain))(jnp.arange(num_envs))
-    agent_idx = jax.random.randint(rng, (num_envs,), 0, 2, dtype=jnp.int32)
+    if randomize_agent_idx:
+        agent_idx = jax.random.randint(rng, (num_envs,), 0, 2, dtype=jnp.int32)
+    else:
+        agent_idx = jnp.zeros(num_envs, dtype=jnp.int32)
     return BatchedEnvState(
         states=init_states,
         agent_idx=agent_idx,
@@ -85,6 +92,7 @@ def _single_step(
     horizon: int,
     *,
     player_order_actions: bool = True,
+    randomize_agent_idx: bool = False,
 ) -> Tuple[OvercookedState, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Pure transition for one environment; safe to vmap.
 
@@ -134,9 +142,12 @@ def _single_step(
         reset_state,
     )
 
-    # Resample which player is the training agent at the start of each episode.
+    # Resample which player is the training agent at the start of each episode,
+    # or keep it fixed for TF-parity (TF seeds all subprocesses with np.random.seed(0),
+    # making agent_idx effectively deterministic and synchronized across envs).
     reset_agent_idx = jax.random.randint(reset_key, (), 0, 2, dtype=jnp.int32)
-    new_agent_idx = jnp.where(done_b, reset_agent_idx, agent_idx)
+    chosen_idx = jnp.where(randomize_agent_idx, reset_agent_idx, agent_idx)
+    new_agent_idx = jnp.where(done_b, chosen_idx, agent_idx)
 
     return next_state, reward, done, new_agent_idx, new_ep_sparse, new_ep_shaped, sparse
 
@@ -156,6 +167,7 @@ def batched_step(
     horizon: int,
     *,
     player_order_actions: bool = True,
+    randomize_agent_idx: bool = False,
 ) -> Tuple[BatchedEnvState, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Step all N environments in parallel via vmap.
 
@@ -186,6 +198,7 @@ def batched_step(
             shaping_factor,
             horizon,
             player_order_actions=player_order_actions,
+            randomize_agent_idx=randomize_agent_idx,
         )
     )(
         bstate.states,

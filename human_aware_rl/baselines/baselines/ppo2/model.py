@@ -102,7 +102,7 @@ class Model(object):
         grads_and_var = self.trainer.compute_gradients(loss, params)
         grads, var = zip(*grads_and_var)
 
-        
+        raw_global_norm = tf.global_norm(grads)
 
         if max_grad_norm is not None:
             # Clip the gradients (normalize)
@@ -113,8 +113,8 @@ class Model(object):
         self.grads = grads
         self.var = var
         self._train_op = self.trainer.apply_gradients(grads_and_var)
-        self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
-        self.stats_list = [pg_loss, vf_loss, entropy, approxkl, clipfrac]
+        self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'raw_grad_norm']
+        self.stats_list = [pg_loss, vf_loss, entropy, approxkl, clipfrac, raw_global_norm]
 
 
         self.train_model = train_model

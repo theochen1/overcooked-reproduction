@@ -13,6 +13,37 @@ from baselines.ppo2.runner import Runner
 from collections import defaultdict
 
 
+def _l2_norm_from_arrays(arrays):
+    sq = 0.0
+    for a in arrays:
+        sq += float(np.sum(np.square(a)))
+    return float(np.sqrt(sq))
+
+
+def _delta_group_norms(var_names, pre_vals, post_vals):
+    group_sq = {"trunk": 0.0, "policy_head": 0.0, "value_head": 0.0, "other": 0.0}
+    global_sq = 0.0
+    for name, pre, post in zip(var_names, pre_vals, post_vals):
+        delta = post - pre
+        sq = float(np.sum(np.square(delta)))
+        global_sq += sq
+        if "/pi/pi/" in name or name.endswith("/pi/w:0") or name.endswith("/pi/b:0"):
+            group_sq["policy_head"] += sq
+        elif "/pi/vf/" in name or name.endswith("/vf/w:0") or name.endswith("/vf/b:0"):
+            group_sq["value_head"] += sq
+        elif "/pi/" in name:
+            group_sq["trunk"] += sq
+        else:
+            group_sq["other"] += sq
+    return {
+        "delta_norm_global": float(np.sqrt(global_sq)),
+        "delta_norm_trunk": float(np.sqrt(group_sq["trunk"])),
+        "delta_norm_policy_head": float(np.sqrt(group_sq["policy_head"])),
+        "delta_norm_value_head": float(np.sqrt(group_sq["value_head"])),
+        "delta_norm_other": float(np.sqrt(group_sq["other"])),
+    }
+
+
 def constfn(val):
     def f(_):
         return val
@@ -134,6 +165,22 @@ def learn(*, network, env, total_timesteps, early_stopping = False, eval_env = N
     run_info = defaultdict(list)
     nupdates = total_timesteps//nbatch
     print("TOT NUM UPDATES", nupdates)
+    debug_delta = os.environ.get("TF_DELTA_DEBUG", "0") == "1"
+    debug_vars = model.var if debug_delta else None
+    debug_var_names = [v.name for v in debug_vars] if debug_delta else None
+    if debug_delta:
+        print("TF_DELTA_DEBUG_VAR_NAMES_BEGIN")
+        for name in debug_var_names:
+            if "/pi/pi/" in name or name.endswith("/pi/w:0") or name.endswith("/pi/b:0"):
+                group = "policy_head"
+            elif "/pi/vf/" in name or name.endswith("/vf/w:0") or name.endswith("/vf/b:0"):
+                group = "value_head"
+            elif "/pi/" in name:
+                group = "trunk"
+            else:
+                group = "other"
+            print("TF_DELTA_VAR {} :: {}".format(group, name))
+        print("TF_DELTA_DEBUG_VAR_NAMES_END")
     for update in range(1, nupdates+1):
         assert nbatch % nminibatches == 0, "Have {} total batch size and want {} minibatches, can't split evenly".format(nbatch, nminibatches)
         # Start timer
@@ -167,6 +214,9 @@ def learn(*, network, env, total_timesteps, early_stopping = False, eval_env = N
         if eval_env is not None:
             eval_epinfobuf.extend(eval_epinfos)
 
+        if debug_delta:
+            pre_vals = model.sess.run(debug_vars)
+            pre_param_norm = _l2_norm_from_arrays(pre_vals)
         # Here what we're going to do is for each minibatch calculate the loss and append it.
         mblossvals = []
         if states is None: # nonrecurrent version
@@ -200,6 +250,27 @@ def learn(*, network, env, total_timesteps, early_stopping = False, eval_env = N
 
         # Feedforward --> get losses --> update
         lossvals = np.mean(mblossvals, axis=0)
+        if debug_delta:
+            post_vals = model.sess.run(debug_vars)
+            post_param_norm = _l2_norm_from_arrays(post_vals)
+            delta_norms = _delta_group_norms(debug_var_names, pre_vals, post_vals)
+            rel_delta = delta_norms["delta_norm_global"] / max(pre_param_norm, 1e-12)
+            print(
+                "TF_DELTA_DEBUG update={} "
+                "delta_global={:.9f} delta_trunk={:.9f} delta_policy_head={:.9f} "
+                "delta_value_head={:.9f} delta_other={:.9f} rel_delta={:.9f} "
+                "param_norm_pre={:.9f} param_norm_post={:.9f}".format(
+                    update,
+                    delta_norms["delta_norm_global"],
+                    delta_norms["delta_norm_trunk"],
+                    delta_norms["delta_norm_policy_head"],
+                    delta_norms["delta_norm_value_head"],
+                    delta_norms["delta_norm_other"],
+                    rel_delta,
+                    pre_param_norm,
+                    post_param_norm,
+                )
+            )
         # End timer
         tnow = time.perf_counter()
         # Calculate the fps (frame per second)

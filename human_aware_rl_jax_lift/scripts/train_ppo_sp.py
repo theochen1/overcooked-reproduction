@@ -22,14 +22,35 @@ def main() -> None:
     parser.add_argument("--save_dir", type=str, default="data/ppo_runs")
     parser.add_argument("--total_timesteps", type=int, default=None)
     parser.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="Enable detailed PPO diagnostics logging (gradient norms/adv stats/loss components).",
+    )
+    parser.add_argument(
         "--jax",
         action="store_true",
         help="Use the fully-JAX rollout runner (vmap+lax.scan). Recommended on GPU.",
     )
+    parser.add_argument(
+        "--max_grad_norm",
+        type=float,
+        default=None,
+        help="Override max gradient norm for clipping (default: use config value).",
+    )
+    parser.add_argument(
+        "--randomize_agent_idx",
+        action="store_true",
+        help="Randomly assign training agent to P0 or P1 each episode (TF parity: off).",
+    )
+    parser.add_argument(
+        "--bootstrap_with_zero_obs",
+        action="store_true",
+        help="Use V(zeros) as rollout bootstrap value (mimics TF runner bootstrap path).",
+    )
     args = parser.parse_args()
 
     overrides = get_hparams("ppo_sp", args.layout)
-    cfg = PPOConfig(
+    cfg_kwargs = dict(
         total_timesteps=int(6e6 if args.total_timesteps is None else args.total_timesteps),
         layout_name=args.layout,
         other_agent_type="sp",
@@ -37,6 +58,13 @@ def main() -> None:
         vf_coef=float(overrides["vf_coef"]),
         rew_shaping_horizon=int(overrides["rew_shaping_horizon"]),
     )
+    if args.max_grad_norm is not None:
+        cfg_kwargs["max_grad_norm"] = args.max_grad_norm
+    if args.randomize_agent_idx:
+        cfg_kwargs["randomize_agent_idx"] = True
+    if args.bootstrap_with_zero_obs:
+        cfg_kwargs["bootstrap_with_zero_obs"] = True
+    cfg = PPOConfig(**cfg_kwargs)
 
     if args.jax:
         run_name = f"ppo_sp_jax_{args.layout}"
@@ -47,6 +75,7 @@ def main() -> None:
             other_agent_type="sp",
             save_dir=args.save_dir,
             ex_name=run_name,
+            diagnostics=bool(args.diagnostics),
         )
     else:
         run_name = f"ppo_sp_{args.layout}"

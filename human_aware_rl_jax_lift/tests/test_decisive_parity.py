@@ -17,6 +17,7 @@ from human_aware_rl_jax_lift.env.compat import from_legacy_state
 from human_aware_rl_jax_lift.env.layouts import parse_layout
 from human_aware_rl_jax_lift.env.overcooked_mdp import step as jax_step
 from human_aware_rl_jax_lift.env.state import make_initial_state
+from human_aware_rl_jax_lift.encoding.ppo_masks import lossless_state_encoding_20
 from human_aware_rl_jax_lift.agents.ppo.train import compute_gae
 from human_aware_rl_jax_lift.training.vec_env_jax import batched_step, encode_obs, make_batched_state
 
@@ -71,6 +72,36 @@ def _get_index_to_action():
         actions_mod, _ = _import_legacy()
         INDEX_TO_ACTION = actions_mod.Action.INDEX_TO_ACTION
     return INDEX_TO_ACTION
+
+
+def _legacy_encoding_pair(mdp, legacy_state):
+    """Return (p0_obs, p1_obs) from legacy encoding as numpy arrays."""
+    enc = mdp.lossless_state_encoding(legacy_state)
+    if isinstance(enc, (list, tuple)) and len(enc) == 2:
+        return np.asarray(enc[0]), np.asarray(enc[1])
+    enc_np = np.asarray(enc)
+    assert enc_np.shape[0] == 2, f"Unexpected legacy encoding shape: {enc_np.shape}"
+    return enc_np[0], enc_np[1]
+
+
+def _assert_obs_equal(layout, state_idx, player_idx, jax_obs, legacy_obs):
+    assert jax_obs.shape == legacy_obs.shape, (
+        f"[{layout}] state={state_idx} player={player_idx}: "
+        f"shape mismatch jax={jax_obs.shape} legacy={legacy_obs.shape}"
+    )
+    if not np.array_equal(jax_obs, legacy_obs):
+        diff = np.argwhere(jax_obs != legacy_obs)
+        details = []
+        for d in diff[:10]:
+            idx = tuple(d)
+            details.append(
+                f"  idx={idx}: jax={jax_obs[idx]} legacy={legacy_obs[idx]}"
+            )
+        raise AssertionError(
+            f"[{layout}] state={state_idx} player={player_idx}: "
+            f"obs mismatch with {len(diff)} differing entries:\n"
+            + "\n".join(details)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +169,50 @@ def test_step_parity_random_sequence(layout):
         f"Cumulative shaped mismatch over {N_RANDOM_STEPS} steps: "
         f"jax={cum_shaped_jax}  legacy={cum_shaped_legacy}"
     )
+
+
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_obs_encoding_parity(layout):
+    """Compare legacy vs JAX 20-channel lossless encoding channel-by-channel."""
+    terrain = parse_layout(layout)
+    mdp = _make_legacy_mdp(layout)
+    idx_to_act = _get_index_to_action()
+
+    # Build a diverse state set: initial + random reachable states.
+    legacy_states = []
+    legacy_state = mdp.get_standard_start_state()
+    legacy_states.append(legacy_state)
+
+    rng = np.random.RandomState(31415)
+    for t in range(120):
+        a0_idx, a1_idx = rng.randint(0, 6, size=2)
+        joint_action = (idx_to_act[a0_idx], idx_to_act[a1_idx])
+        legacy_state, _, _ = mdp.get_state_transition(legacy_state, joint_action)
+        if t in (1, 7, 33, 79, 119):
+            legacy_states.append(legacy_state)
+
+    for s_idx, legacy_s in enumerate(legacy_states):
+        jax_s = from_legacy_state(terrain, legacy_s)
+
+        legacy_p0, legacy_p1 = _legacy_encoding_pair(mdp, legacy_s)
+        jax_p0, jax_p1 = lossless_state_encoding_20(terrain, jax_s)
+        jax_p0 = np.asarray(jax_p0)
+        jax_p1 = np.asarray(jax_p1)
+
+        if not np.array_equal(jax_p0, np.asarray(legacy_p0)):
+            diff_idx = np.argwhere(jax_p0 != np.asarray(legacy_p0))
+            print(f"\n[{layout}] state={s_idx} player=0 MISMATCH DIAGNOSTICS:")
+            print(f"  Legacy objects: {legacy_s.objects}")
+            print(f"  Legacy players: {[(p.position, p.orientation, p.held_object) for p in legacy_s.players]}")
+            print(f"  JAX counter_obj: {np.asarray(jax_s.counter_obj)}")
+            print(f"  JAX held_obj: {np.asarray(jax_s.held_obj)}")
+            print(f"  JAX player_pos: {np.asarray(jax_s.player_pos)}")
+            for d in diff_idx[:10]:
+                idx = tuple(d)
+                print(f"  diff at {idx}: jax={jax_p0[idx]} legacy={np.asarray(legacy_p0)[idx]}")
+
+        _assert_obs_equal(layout, s_idx, 0, jax_p0, np.asarray(legacy_p0))
+        _assert_obs_equal(layout, s_idx, 1, jax_p1, np.asarray(legacy_p1))
 
 
 @pytest.mark.parametrize("layout", LAYOUTS)

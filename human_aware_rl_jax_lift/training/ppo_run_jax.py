@@ -15,6 +15,7 @@ Key differences from ppo_run.py
 import pickle
 import sys
 import time
+from collections import deque
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -98,6 +99,35 @@ def _flatten(x: jnp.ndarray) -> jnp.ndarray:
     return x.reshape((t * n,) + x.shape[2:])
 
 
+def _update_delta_norms(params_before, params_after) -> dict:
+    delta = jax.tree_util.tree_map(lambda new, old: new - old, params_after, params_before)
+    p = delta["params"]
+    conv = jnp.sqrt(sum(
+        jnp.sum(jnp.square(p[f"Conv_{i}"]["kernel"])) +
+        jnp.sum(jnp.square(p[f"Conv_{i}"]["bias"]))
+        for i in range(3)
+    ))
+    dense = jnp.sqrt(sum(
+        jnp.sum(jnp.square(p[f"Dense_{i}"]["kernel"])) +
+        jnp.sum(jnp.square(p[f"Dense_{i}"]["bias"]))
+        for i in range(3)
+    ))
+    policy_head = jnp.sqrt(
+        jnp.sum(jnp.square(p["Dense_3"]["kernel"])) +
+        jnp.sum(jnp.square(p["Dense_3"]["bias"]))
+    )
+    value_head = jnp.sqrt(
+        jnp.sum(jnp.square(p["Dense_4"]["kernel"])) +
+        jnp.sum(jnp.square(p["Dense_4"]["bias"]))
+    )
+    return {
+        "update_delta_norm_global": float(optax.global_norm(delta)),
+        "update_delta_norm_trunk": float(jnp.sqrt(conv * conv + dense * dense)),
+        "update_delta_norm_policy_head": float(policy_head),
+        "update_delta_norm_value_head": float(value_head),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Update-epoch: all minibatches, metrics stay on device until the end
 # ---------------------------------------------------------------------------
@@ -154,6 +184,7 @@ def ppo_run_jax(
     ex_name: Optional[str] = None,
     lr_annealing: Optional[float] = None,
     best_bc_model_paths: Optional[dict] = None,
+    diagnostics: bool = False,
 ) -> List[dict]:
     """
     JAX-optimised PPO training loop (self-play only).
@@ -238,7 +269,10 @@ def ppo_run_jax(
         print(f"[{_ts(t0)}] Creating BatchedEnvState ({config.num_envs} envs)...")
         sys.stdout.flush()
         rng, env_rng = jax.random.split(rng)
-        bstate = make_batched_state(terrain, config.num_envs, env_rng)
+        bstate = make_batched_state(
+            terrain, config.num_envs, env_rng,
+            randomize_agent_idx=config.randomize_agent_idx,
+        )
         obs0, _ = encode_obs(terrain, bstate)
         print(f"[{_ts(t0)}] BatchedEnvState ready.")
         sys.stdout.flush()
@@ -250,6 +284,8 @@ def ppo_run_jax(
             terrain=terrain,
             horizon=config.horizon,
             num_envs=config.num_envs,
+            randomize_agent_idx=config.randomize_agent_idx,
+            bootstrap_with_zero_obs=config.bootstrap_with_zero_obs,
         )
 
         # ---- Logging buffers -------------------------------------------------
@@ -258,9 +294,39 @@ def ppo_run_jax(
             "policy_loss": [], "value_loss": [], "policy_entropy": [],
             "approxkl": [], "clipfrac": [], "explained_variance": [],
         }
+        if diagnostics:
+            logs.update({
+                "grad_norm_global": [],
+                "grad_norm_conv": [],
+                "grad_norm_dense": [],
+                "grad_norm_policy_head": [],
+                "grad_norm_value_head": [],
+                "delta_norm_global": [],
+                "delta_norm_conv": [],
+                "delta_norm_dense": [],
+                "delta_norm_policy_head": [],
+                "delta_norm_value_head": [],
+                "update_delta_norm_global": [],
+                "update_delta_norm_trunk": [],
+                "update_delta_norm_policy_head": [],
+                "update_delta_norm_value_head": [],
+                "adv_mean": [],
+                "adv_std": [],
+                "adv_min": [],
+                "adv_max": [],
+                "adv_norm_mean": [],
+                "adv_norm_std": [],
+                "adv_norm_min": [],
+                "adv_norm_max": [],
+                "loss_component_actor": [],
+                "loss_component_value_scaled": [],
+                "loss_component_entropy_scaled": [],
+            })
         best_sparse = float("-inf")
         total_steps = 0
         t_start = time.time()
+        eprew_buffer = deque(maxlen=100)
+        ep_sparse_buffer = deque(maxlen=100)
 
         # Match TF baseline: first rollout uses sf=1.0; annealing is applied
         # AFTER each update (using total_steps at the end of the update).
@@ -307,12 +373,14 @@ def ppo_run_jax(
             adv_flat     = _flatten(jnp.asarray(adv))
             ret_flat     = _flatten(jnp.asarray(ret))
 
+            params_before_update = train_state.params
             rng, update_rng = jax.random.split(rng)
             train_state, mean_metrics, rng = _run_update_epochs(
                 train_state,
                 obs_flat, actions_flat, logp_flat, values_flat, adv_flat, ret_flat,
                 config, update_rng,
             )
+            mean_metrics.update(_update_delta_norms(params_before_update, train_state.params))
 
             # ---- Logging -----------------------------------------------------
             t_now   = time.time()
@@ -322,8 +390,20 @@ def ppo_run_jax(
             current_lr = _current_lr(train_state, float(config.learning_rate))
             ev = _explained_variance(np.asarray(values_flat), np.asarray(ret_flat))
 
-            eprewmean = float(rollout.infos["eprewmean"])
-            ep_sparse = float(rollout.infos["ep_sparse_rew_mean"])
+            completed_eprew = np.asarray(
+                rollout.infos.get("completed_eprew", []), dtype=np.float32
+            ).reshape(-1)
+            completed_ep_sparse = np.asarray(
+                rollout.infos.get("completed_ep_sparse_rew", []), dtype=np.float32
+            ).reshape(-1)
+            for r in completed_eprew:
+                eprew_buffer.append(float(r))
+            for r in completed_ep_sparse:
+                ep_sparse_buffer.append(float(r))
+
+            # Match TF/Baselines: rolling mean over most recent 100 finished episodes.
+            eprewmean = float(np.mean(eprew_buffer)) if eprew_buffer else float(rollout.infos["eprewmean"])
+            ep_sparse = float(np.mean(ep_sparse_buffer)) if ep_sparse_buffer else float(rollout.infos["ep_sparse_rew_mean"])
 
             for k, v in [
                 ("eprewmean", eprewmean), ("ep_sparse_rew_mean", ep_sparse),
@@ -336,6 +416,35 @@ def ppo_run_jax(
                 ("explained_variance", ev),
             ]:
                 logs[k].append(v)
+            if diagnostics:
+                for k in (
+                    "grad_norm_global",
+                    "grad_norm_conv",
+                    "grad_norm_dense",
+                    "grad_norm_policy_head",
+                    "grad_norm_value_head",
+                    "delta_norm_global",
+                    "delta_norm_conv",
+                    "delta_norm_dense",
+                    "delta_norm_policy_head",
+                    "delta_norm_value_head",
+                    "update_delta_norm_global",
+                    "update_delta_norm_trunk",
+                    "update_delta_norm_policy_head",
+                    "update_delta_norm_value_head",
+                    "adv_mean",
+                    "adv_std",
+                    "adv_min",
+                    "adv_max",
+                    "adv_norm_mean",
+                    "adv_norm_std",
+                    "adv_norm_min",
+                    "adv_norm_max",
+                    "loss_component_actor",
+                    "loss_component_value_scaled",
+                    "loss_component_entropy_scaled",
+                ):
+                    logs[k].append(float(mean_metrics.get(k, 0.0)))
 
             rew_per_step = eprewmean / max(config.horizon, 1)
             print(f"Curr learning rate {current_lr} \t Curr reward per step {rew_per_step:.6g}")
@@ -356,6 +465,34 @@ def ppo_run_jax(
                 "true_eprew":         ep_sparse,
                 "value_loss":         mean_metrics.get("value_loss",  0.0),
             })
+            if diagnostics:
+                _log_table({
+                    "grad_norm_global": mean_metrics.get("grad_norm_global", 0.0),
+                    "grad_norm_conv": mean_metrics.get("grad_norm_conv", 0.0),
+                    "grad_norm_dense": mean_metrics.get("grad_norm_dense", 0.0),
+                    "grad_norm_policy_head": mean_metrics.get("grad_norm_policy_head", 0.0),
+                    "grad_norm_value_head": mean_metrics.get("grad_norm_value_head", 0.0),
+                    "delta_norm_global": mean_metrics.get("delta_norm_global", 0.0),
+                    "delta_norm_conv": mean_metrics.get("delta_norm_conv", 0.0),
+                    "delta_norm_dense": mean_metrics.get("delta_norm_dense", 0.0),
+                    "delta_norm_policy_head": mean_metrics.get("delta_norm_policy_head", 0.0),
+                    "delta_norm_value_head": mean_metrics.get("delta_norm_value_head", 0.0),
+                    "update_delta_norm_global": mean_metrics.get("update_delta_norm_global", 0.0),
+                    "update_delta_norm_trunk": mean_metrics.get("update_delta_norm_trunk", 0.0),
+                    "update_delta_norm_policy_head": mean_metrics.get("update_delta_norm_policy_head", 0.0),
+                    "update_delta_norm_value_head": mean_metrics.get("update_delta_norm_value_head", 0.0),
+                    "adv_mean": mean_metrics.get("adv_mean", 0.0),
+                    "adv_std": mean_metrics.get("adv_std", 0.0),
+                    "adv_min": mean_metrics.get("adv_min", 0.0),
+                    "adv_max": mean_metrics.get("adv_max", 0.0),
+                    "adv_norm_mean": mean_metrics.get("adv_norm_mean", 0.0),
+                    "adv_norm_std": mean_metrics.get("adv_norm_std", 0.0),
+                    "adv_norm_min": mean_metrics.get("adv_norm_min", 0.0),
+                    "adv_norm_max": mean_metrics.get("adv_norm_max", 0.0),
+                    "loss_component_actor": mean_metrics.get("loss_component_actor", 0.0),
+                    "loss_component_value_scaled": mean_metrics.get("loss_component_value_scaled", 0.0),
+                    "loss_component_entropy_scaled": mean_metrics.get("loss_component_entropy_scaled", 0.0),
+                })
             # Anneal shaping AFTER logging (matches TF baseline order:
             # rollout → PPO update → log → update shaping for next rollout).
             shaping_factor = float(
