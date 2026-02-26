@@ -21,12 +21,13 @@ environment:
     - random3
 
 network:
-  activation: relu          # fixed from leaky_relu(0.2) — see agents/ppo/model.py
+  activation: leaky_relu    # tf.nn.leaky_relu alpha=0.2 (TF default)
+  leaky_relu_alpha: 0.2
   conv_filters: 25
   conv_layers:
     - {kernel: [5, 5], padding: SAME}
     - {kernel: [3, 3], padding: SAME}
-    - {kernel: [3, 3], padding: SAME}
+    - {kernel: [3, 3], padding: VALID}
   fc_layers: 3
   hidden_dim: 32
 
