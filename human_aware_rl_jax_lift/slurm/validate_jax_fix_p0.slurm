@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --job-name=oc_parity_tests
+#SBATCH --job-name=oc_fix_p0
 #SBATCH --account=mit_general
 #SBATCH --qos=normal
 #SBATCH --partition=mit_normal_gpu
 #SBATCH -G 1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=24G
-#SBATCH --time=00:30:00
-#SBATCH --output=logs/parity_tests_%j.out
-#SBATCH --error=logs/parity_tests_%j.err
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=48G
+#SBATCH --time=06:00:00
+#SBATCH --output=logs/validate_fix_p0_%j.out
+#SBATCH --error=logs/validate_fix_p0_%j.err
 
 set -euo pipefail
 
@@ -18,8 +18,9 @@ module load cuda/12.1 2>/dev/null || true
 module load miniforge
 conda activate overcooked
 
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 export JAX_COMPILATION_CACHE_DIR="/home/tchen22/.cache/jax_compile_cache"
 mkdir -p "$JAX_COMPILATION_CACHE_DIR"
 
@@ -38,16 +39,22 @@ cd "$SLURM_SUBMIT_DIR/.."
 
 echo ""
 echo "======================================================"
-echo "Running parity test suite"
+echo "Validation: fixed agent_idx=0 (TF parity)"
+echo "JAX PPO SP on simple (2 seeds, 3.6M steps = 300 updates)"
+echo "randomize_agent_idx is OFF (default) — training agent always P0"
+echo "Acceptance criteria:"
+echo "  entropy < 1.2 by update 200"
+echo "  true_eprew > 100 by update 300"
+echo "  approxkl in [0.001, 0.01]"
 echo "======================================================"
 
-python -m pytest \
-    tests/test_encoding_parity.py \
-    tests/test_decisive_parity.py::test_obs_encoding_parity \
-    tests/test_decisive_parity.py::test_multi_episode_reset_parity \
-    tests/test_decisive_parity.py::test_reward_pipeline_rollout_and_gae_parity \
-    tests/test_decisive_parity.py::test_step_parity_random_sequence \
-    -v -s 2>&1
+python -u scripts/train_ppo_sp.py \
+    --layout simple \
+    --seeds 2229 7225 \
+    --total_timesteps 3600000 \
+    --save_dir data/ppo_runs_validation_fix_p0 \
+    --jax \
+    --diagnostics
 
 echo ""
 echo "======================================================"
