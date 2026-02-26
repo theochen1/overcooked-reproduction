@@ -93,14 +93,25 @@ def _single_step(
       for legacy MDP parity.
     - If player_order_actions=False: interpret as (agent_idx_action, other_action)
       to match the human_aware_rl Gym wrapper behavior.
+
+    NOTE: Must not use a Python `if` on player_order_actions because under @jit it
+    is traced; use JAX control flow instead.
     """
-    if player_order_actions:
-        joint = jnp.stack([training_action, other_action]).astype(jnp.int32)
-    else:
-        # Build joint action respecting which player is the training agent.
-        actions_if_0 = jnp.stack([training_action, other_action])   # [ta, oa]
-        actions_if_1 = jnp.stack([other_action, training_action])   # [oa, ta]
-        joint = jnp.where(agent_idx == 0, actions_if_0, actions_if_1).astype(jnp.int32)
+    # (p0, p1) ordering
+    joint_player = jnp.stack([training_action, other_action]).astype(jnp.int32)
+
+    # (agent_idx, other) ordering
+    actions_if_0 = jnp.stack([training_action, other_action])   # [ta, oa]
+    actions_if_1 = jnp.stack([other_action, training_action])   # [oa, ta]
+    joint_agent = jnp.where(agent_idx == 0, actions_if_0, actions_if_1).astype(jnp.int32)
+
+    po = jnp.asarray(player_order_actions)
+    joint = jax.lax.cond(
+        po,
+        lambda _: joint_player,
+        lambda _: joint_agent,
+        operand=None,
+    )
 
     next_state, sparse, shaped, info = env_step(
         terrain, state, joint, shaping_factor=shaping_factor
