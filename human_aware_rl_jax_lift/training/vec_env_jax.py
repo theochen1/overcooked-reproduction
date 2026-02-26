@@ -83,13 +83,24 @@ def _single_step(
     reset_key: jax.Array,
     shaping_factor: jnp.ndarray,
     horizon: int,
+    *,
+    player_order_actions: bool = True,
 ) -> Tuple[OvercookedState, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """Pure transition for one environment; safe to vmap."""
-    # Build joint action respecting which player is the training agent.
-    # Use jnp.stack + indexing to avoid Python branching.
-    actions_if_0 = jnp.stack([training_action, other_action])   # [ta, oa]
-    actions_if_1 = jnp.stack([other_action, training_action])   # [oa, ta]
-    joint = jnp.where(agent_idx == 0, actions_if_0, actions_if_1).astype(jnp.int32)
+    """Pure transition for one environment; safe to vmap.
+
+    Semantics of (training_action, other_action):
+    - If player_order_actions=True (default): interpret as (p0_action, p1_action)
+      for legacy MDP parity.
+    - If player_order_actions=False: interpret as (agent_idx_action, other_action)
+      to match the human_aware_rl Gym wrapper behavior.
+    """
+    if player_order_actions:
+        joint = jnp.stack([training_action, other_action]).astype(jnp.int32)
+    else:
+        # Build joint action respecting which player is the training agent.
+        actions_if_0 = jnp.stack([training_action, other_action])   # [ta, oa]
+        actions_if_1 = jnp.stack([other_action, training_action])   # [oa, ta]
+        joint = jnp.where(agent_idx == 0, actions_if_0, actions_if_1).astype(jnp.int32)
 
     next_state, sparse, shaped, info = env_step(
         terrain, state, joint, shaping_factor=shaping_factor
@@ -132,22 +143,38 @@ def batched_step(
     reset_keys: jax.Array,            # [N, 2] PRNGKeys for env resets (used when done)
     shaping_factor: jnp.ndarray,      # scalar float32
     horizon: int,
+    *,
+    player_order_actions: bool = True,
 ) -> Tuple[BatchedEnvState, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """
-    Step all N environments in parallel via vmap.
+    """Step all N environments in parallel via vmap.
 
     Returns
     -------
     new_bstate : BatchedEnvState
-    obs0       : [N, H, W, C]  training-agent observations
-    obs1       : [N, H, W, C]  other-agent observations
+    obs0       : [N, W, H, C]  training-agent observations
+    obs1       : [N, W, H, C]  other-agent observations
     rewards    : [N]  float32  total (sparse + shaped) reward
     dones      : [N]  float32  1.0 on episode end
     sparse_r   : [N]  float32  sparse component only (for logging)
+
+    Notes
+    -----
+    The (training_actions, other_actions) meaning depends on player_order_actions.
+    See _single_step docstring.
     """
     next_states, rewards, dones, new_agent_idx, new_ep_sparse, new_ep_shaped, sparse_r = jax.vmap(
         lambda s, idx, ta, oa, ep_sp, ep_sh, rk: _single_step(
-            terrain, s, idx, ta, oa, ep_sp, ep_sh, rk, shaping_factor, horizon
+            terrain,
+            s,
+            idx,
+            ta,
+            oa,
+            ep_sp,
+            ep_sh,
+            rk,
+            shaping_factor,
+            horizon,
+            player_order_actions=player_order_actions,
         )
     )(
         bstate.states,

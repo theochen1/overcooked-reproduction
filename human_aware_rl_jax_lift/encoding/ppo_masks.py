@@ -1,4 +1,9 @@
-"""Legacy 20-channel lossless encoding for PPO/CNN policies."""
+"""Legacy 20-channel lossless encoding for PPO/CNN policies.
+
+IMPORTANT: This mirrors the *legacy* human_aware_rl / overcooked_ai_py
+`OvercookedGridworld.lossless_state_encoding` convention where the first two
+axes are ordered as (width, height) and are indexed by (x, y) positions.
+"""
 
 import jax.numpy as jnp
 
@@ -6,13 +11,19 @@ from human_aware_rl_jax_lift.env.state import OBJ_DISH, OBJ_ONION, OBJ_SOUP, Ove
 
 
 def _make_layer(shape, positions: jnp.ndarray, values: jnp.ndarray) -> jnp.ndarray:
+    """Create a 2D layer with axis-0 = x, axis-1 = y (legacy convention)."""
     layer = jnp.zeros(shape, dtype=jnp.int32)
-    ys = positions[:, 1]
     xs = positions[:, 0]
-    return layer.at[ys, xs].set(values)
+    ys = positions[:, 1]
+    return layer.at[xs, ys].set(values)
 
 
-def _player_orientation_layer(shape, pos: jnp.ndarray, orientation_idx: jnp.ndarray, target_idx: int) -> jnp.ndarray:
+def _player_orientation_layer(
+    shape,
+    pos: jnp.ndarray,
+    orientation_idx: jnp.ndarray,
+    target_idx: int,
+) -> jnp.ndarray:
     v = jnp.where(orientation_idx == target_idx, 1, 0)
     return _make_layer(shape, pos[None, :], jnp.array([v], dtype=jnp.int32))
 
@@ -34,12 +45,12 @@ def _object_layer_from_sources(
 
 
 def lossless_state_encoding_20(terrain: Terrain, state: OvercookedState):
-    """
-    Return tuple(obs_for_player0, obs_for_player1), each HxWx20.
-    Mirrors legacy `overcooked_mdp.lossless_state_encoding`.
+    """Return tuple(obs_for_player0, obs_for_player1), each WxHx20.
+
+    Matches legacy `OvercookedGridworld.lossless_state_encoding` exactly.
     """
     h, w = terrain.grid.shape
-    shape = (h, w)
+    shape = (w, h)
 
     def process(primary: int):
         other = 1 - primary
@@ -107,6 +118,7 @@ def lossless_state_encoding_20(terrain: Terrain, state: OvercookedState):
         layers.append(onion_layer)
 
         stacked = jnp.stack(layers, axis=0)
+        # Keep legacy axis order: (W, H, C)
         return jnp.transpose(stacked, (1, 2, 0))
 
     return process(0), process(1)

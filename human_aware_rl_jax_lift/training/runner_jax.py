@@ -131,6 +131,7 @@ def make_rollout_fn(
                 reset_keys,
                 shaping_factor,
                 horizon,
+                player_order_actions=False,
             )
 
             transition = (obs0, actions, rewards, dones, values, logp, sparse_r)
