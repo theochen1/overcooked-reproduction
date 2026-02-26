@@ -68,8 +68,8 @@ apptainer exec \
   "${JAX_SIF_PATH}" \
   bash -lc "
     set -euo pipefail
-    export PYTHONPATH=${CONT_REPO_ROOT}/overcooked_ai-master/src:\${PYTHONPATH:-}
-    python ${CONT_REPO_ROOT}/overcooked_ai-master/src/human_aware_rl/jaxmarl/minibatch_tf_vs_jax.py \
+    export PYTHONPATH=${CONT_REPO_ROOT}:\${PYTHONPATH:-}
+    python ${CONT_REPO_ROOT}/human_aware_rl_jax_lift/scripts/compare_tf_jax_minibatch.py \
       --in_dir ${CONT_PARITY_DIR} \
       --out_json ${CONT_PARITY_DIR}/jax_tf_minibatch_compare.json
   "
