@@ -26,7 +26,7 @@ def create_train_state(
     lr = config.learning_rate if learning_rate is None else learning_rate
     tx = optax.chain(
         optax.clip_by_global_norm(config.max_grad_norm),
-        optax.adam(lr),
+        optax.adam(lr, eps=1e-5),  # Match TF Baselines default
     )
     return TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
