@@ -89,8 +89,23 @@ class RolloutRunner:
                     flush=True,
                 )
 
+            # DIAGNOSTIC: fine-grained timing for first step of first rollout
+            if self._n_rollouts == 0 and step == 0:
+                t0 = time.time()
+                print(f"  [DIAG step 0] Starting rng split... ", end="", flush=True)
+            
             rng, rng_policy, rng_partner = jax.random.split(rng, 3)
+            
+            if self._n_rollouts == 0 and step == 0:
+                print(f"done (+{time.time()-t0:.2f}s)", flush=True)
+                print(f"  [DIAG step 0] Calling _policy_step... ", end="", flush=True)
+            
             actions, values, logp = self._policy_step(self.obs0, rng_policy)
+            
+            if self._n_rollouts == 0 and step == 0:
+                print(f"done (+{time.time()-t0:.2f}s)", flush=True)
+                print(f"  [DIAG step 0] Calling other_agent.act... ", end="", flush=True)
+            
             # vec_env.states are kept as numpy (see vec_env.py) so partner never blocks on device syncs
             other_actions = self.other_agent.act(
                 self.obs1,
@@ -101,7 +116,16 @@ class RolloutRunner:
                 states=self.vec_env.states,
                 agent_idx=self.vec_env.agent_idx,
             )
+            
+            if self._n_rollouts == 0 and step == 0:
+                print(f"done (+{time.time()-t0:.2f}s)", flush=True)
+                print(f"  [DIAG step 0] Calling vec_env.step_all... ", end="", flush=True)
+            
             step_out = self.vec_env.step_all(actions, other_actions)
+            
+            if self._n_rollouts == 0 and step == 0:
+                print(f"done (+{time.time()-t0:.2f}s)", flush=True)
+                print(f"  [DIAG step 0] Collecting buffers... ", end="", flush=True)
 
             obs_buf.append(self.obs0.copy())
             act_buf.append(actions)
@@ -118,6 +142,10 @@ class RolloutRunner:
             self.obs0 = step_out.obs0
             self.obs1 = step_out.obs1
             self.agent_idx = step_out.other_agent_env_idx
+            
+            if self._n_rollouts == 0 and step == 0:
+                print(f"done (+{time.time()-t0:.2f}s)", flush=True)
+                print(f"  [DIAG step 0] Step 0 complete. Total: {time.time()-t0:.2f}s", flush=True)
 
         if self._n_rollouts < 2:
             print(
