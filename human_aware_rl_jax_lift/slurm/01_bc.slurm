@@ -27,7 +27,7 @@ echo "Task=$IDX layout=$LAYOUT split=$SPLIT | $(hostname) | $(date)"
 
 module load miniforge
 conda activate overcooked
-export JAX_PLATFORM_NAME=cpu
+export JAX_PLATFORMS=cpu
 
 mkdir -p "$SLURM_SUBMIT_DIR/../logs"
 cd "$SLURM_SUBMIT_DIR/.."
