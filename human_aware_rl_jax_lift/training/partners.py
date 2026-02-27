@@ -91,6 +91,7 @@ class BCPartner:
             num_envs = timesteps.shape[0]
         else:
             num_envs = len(states)
+            # List of states: runner passes materialized (numpy) states to avoid device syncs here
             timesteps = np.array([int(st.timestep) for st in states], dtype=np.int32)
             player_pos = None
 

@@ -27,9 +27,10 @@ class PPOConfig:
     layout_name: str = "simple"
 
     # Environment
-    randomize_agent_idx: bool = False
+    randomize_agent_idx: bool = True
     bootstrap_with_zero_obs: bool = False
     global_adv_norm: bool = False
+    adv_norm_fp64: bool = False
 
     # Network
     num_filters: int = 25

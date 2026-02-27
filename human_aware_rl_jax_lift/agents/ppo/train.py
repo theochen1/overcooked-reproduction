@@ -96,7 +96,10 @@ def compute_gae(
     return adv, returns
 
 
-@partial(jax.jit, static_argnames=("normalize_advantages", "compute_trunk_grad_decomp"))
+@partial(
+    jax.jit,
+    static_argnames=("normalize_advantages", "compute_trunk_grad_decomp", "adv_norm_fp64"),
+)
 def _ppo_update_step_jit(
     state: TrainState,
     obs: jnp.ndarray,
@@ -111,6 +114,7 @@ def _ppo_update_step_jit(
     max_grad_norm: float,
     normalize_advantages: bool,
     compute_trunk_grad_decomp: bool,
+    adv_norm_fp64: bool,
 ):
     def loss_fn(params):
         logits, values = state.apply_fn(params, obs)
@@ -118,8 +122,13 @@ def _ppo_update_step_jit(
         logp = logp_all[jnp.arange(actions.shape[0]), actions]
         ratio = jnp.exp(logp - old_logp)
 
-        adv_mean = advantages.mean()
-        adv_std = advantages.std() + 1e-8
+        if adv_norm_fp64:
+            adv64 = advantages.astype(jnp.float64)
+            adv_mean = adv64.mean().astype(advantages.dtype)
+            adv_std = (adv64.std() + jnp.asarray(1e-8, dtype=jnp.float64)).astype(advantages.dtype)
+        else:
+            adv_mean = advantages.mean()
+            adv_std = advantages.std() + 1e-8
         adv = jax.lax.cond(
             jnp.asarray(normalize_advantages),
             lambda a: (a - adv_mean) / adv_std,
@@ -166,14 +175,25 @@ def _ppo_update_step_jit(
     trunk_grad_cos_actor_critic = jnp.array(0.0, dtype=jnp.float32)
     trunk_grad_actor_share_total = jnp.array(0.0, dtype=jnp.float32)
     trunk_grad_critic_share_total = jnp.array(0.0, dtype=jnp.float32)
+    trunk_grad_norm_sum_actor_critic = jnp.array(0.0, dtype=jnp.float32)
+    trunk_grad_cancellation_frac = jnp.array(0.0, dtype=jnp.float32)
+    trunk_grad_cancellation_ratio = jnp.array(0.0, dtype=jnp.float32)
+    trunk_grad_norm_total_postclip = jnp.array(0.0, dtype=jnp.float32)
+    trunk_grad_norm_actor_postclip = jnp.array(0.0, dtype=jnp.float32)
+    trunk_grad_norm_critic_postclip = jnp.array(0.0, dtype=jnp.float32)
     if compute_trunk_grad_decomp:
         def actor_component_loss_fn(params):
             logits, values = state.apply_fn(params, obs)
             logp_all = jax.nn.log_softmax(logits)
             logp = logp_all[jnp.arange(actions.shape[0]), actions]
             ratio = jnp.exp(logp - old_logp)
-            adv_mean = advantages.mean()
-            adv_std = advantages.std() + 1e-8
+            if adv_norm_fp64:
+                adv64 = advantages.astype(jnp.float64)
+                adv_mean = adv64.mean().astype(advantages.dtype)
+                adv_std = (adv64.std() + jnp.asarray(1e-8, dtype=jnp.float64)).astype(advantages.dtype)
+            else:
+                adv_mean = advantages.mean()
+                adv_std = advantages.std() + 1e-8
             adv = jax.lax.cond(
                 jnp.asarray(normalize_advantages),
                 lambda a: (a - adv_mean) / adv_std,
@@ -210,6 +230,13 @@ def _ppo_update_step_jit(
         )
         trunk_grad_actor_share_total = trunk_grad_norm_actor / (trunk_grad_norm_total + 1e-12)
         trunk_grad_critic_share_total = trunk_grad_norm_critic / (trunk_grad_norm_total + 1e-12)
+        trunk_grad_norm_sum_actor_critic = trunk_grad_norm_actor + trunk_grad_norm_critic
+        trunk_grad_cancellation_frac = 1.0 - (
+            trunk_grad_norm_total / (trunk_grad_norm_sum_actor_critic + 1e-12)
+        )
+        trunk_grad_cancellation_ratio = trunk_grad_norm_sum_actor_critic / (
+            trunk_grad_norm_total + 1e-12
+        )
 
     state = state.apply_gradients(grads=grads)
     delta_params = jax.tree_util.tree_map(lambda new, old: new - old, state.params, old_params)
@@ -271,6 +298,10 @@ def _ppo_update_step_jit(
     entropy_bonus_scaled = ent_coef * entropy
     grad_norm_global = optax.global_norm(grads)
     grad_clip_coef = jnp.minimum(1.0, max_grad_norm / (grad_norm_global + 1e-12))
+    if compute_trunk_grad_decomp:
+        trunk_grad_norm_total_postclip = trunk_grad_norm_total * grad_clip_coef
+        trunk_grad_norm_actor_postclip = trunk_grad_norm_actor * grad_clip_coef
+        trunk_grad_norm_critic_postclip = trunk_grad_norm_critic * grad_clip_coef
     return state, {
         "loss":         loss,
         "policy_loss":  actor_loss,   # match Baselines key names
@@ -306,6 +337,12 @@ def _ppo_update_step_jit(
         "trunk_grad_cos_actor_critic": trunk_grad_cos_actor_critic,
         "trunk_grad_actor_share_total": trunk_grad_actor_share_total,
         "trunk_grad_critic_share_total": trunk_grad_critic_share_total,
+        "trunk_grad_norm_sum_actor_critic": trunk_grad_norm_sum_actor_critic,
+        "trunk_grad_cancellation_frac": trunk_grad_cancellation_frac,
+        "trunk_grad_cancellation_ratio": trunk_grad_cancellation_ratio,
+        "trunk_grad_norm_total_postclip": trunk_grad_norm_total_postclip,
+        "trunk_grad_norm_actor_postclip": trunk_grad_norm_actor_postclip,
+        "trunk_grad_norm_critic_postclip": trunk_grad_norm_critic_postclip,
     }
 
 
@@ -321,6 +358,7 @@ def ppo_update_step(
     *,
     normalize_advantages: bool = True,
     compute_trunk_grad_decomp: bool = False,
+    adv_norm_fp64: bool = False,
 ):
     return _ppo_update_step_jit(
         state=state,
@@ -336,4 +374,5 @@ def ppo_update_step(
         max_grad_norm=float(config.max_grad_norm),
         normalize_advantages=bool(normalize_advantages),
         compute_trunk_grad_decomp=bool(compute_trunk_grad_decomp),
+        adv_norm_fp64=bool(adv_norm_fp64),
     )

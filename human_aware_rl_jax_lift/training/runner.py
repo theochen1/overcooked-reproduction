@@ -91,6 +91,7 @@ class RolloutRunner:
 
             rng, rng_policy, rng_partner = jax.random.split(rng, 3)
             actions, values, logp = self._policy_step(self.obs0, rng_policy)
+            # vec_env.states are kept as numpy (see vec_env.py) so partner never blocks on device syncs
             other_actions = self.other_agent.act(
                 self.obs1,
                 rng_partner,

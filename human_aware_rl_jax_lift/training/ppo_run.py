@@ -216,6 +216,34 @@ def ppo_run(
         print(f"[{_ts(t0)}] RolloutRunner ready.")
         sys.stdout.flush()
 
+        # Warmup: trigger policy + partner JIT compiles so first rollout step doesn't block
+        print(f"[{_ts(t0)}] Warmup: compiling policy...")
+        sys.stdout.flush()
+        _a, _v, _l = runner._policy_step(runner.obs0, rng)
+        jax.block_until_ready(_a)
+        print(f"[{_ts(t0)}] Warmup: policy compiled.")
+        sys.stdout.flush()
+        rng, rng_partner = jax.random.split(rng)
+        print(f"[{_ts(t0)}] Warmup: compiling partner (one act call)...")
+        sys.stdout.flush()
+        _oa = runner.other_agent.act(
+            runner.obs1,
+            rng_partner,
+            train_state=runner.train_state,
+            self_play_randomization=0.0,
+            trajectory_sp=runner.trajectory_self_play,
+            states=runner.vec_env.states,
+            agent_idx=runner.vec_env.agent_idx,
+        )
+        rng, _ = jax.random.split(rng)
+        print(f"[{_ts(t0)}] Warmup: one env step (compile step_all)...")
+        sys.stdout.flush()
+        _step = runner.vec_env.step_all(_a, _oa)
+        # Reset so first real rollout starts from clean state
+        _, runner.obs0, runner.obs1, runner.agent_idx = runner.vec_env.reset_all()
+        print(f"[{_ts(t0)}] Warmup done.")
+        sys.stdout.flush()
+
         logs: Dict[str, list] = {
             "eprewmean":          [],
             "ep_sparse_rew_mean": [],

@@ -1,10 +1,20 @@
-"""Paper-locked hyperparameters keyed by algorithm and layout."""
+"""Paper-locked hyperparameters keyed by algorithm and layout.
+
+PPO SP (and shared defaults) are loaded from paper_config.yaml when present;
+fallback remains the in-module _PPO_SP for tests/standalone runs.
+"""
 
 from copy import deepcopy
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
+import yaml
 
 PAPER_LAYOUTS = ("simple", "unident_s", "random1", "random0", "random3")
+
+# Package root (human_aware_rl_jax_lift); paper_config.yaml lives there.
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+_PAPER_CONFIG_PATH = _PACKAGE_ROOT / "paper_config.yaml"
 
 
 _PPO_SP = {
@@ -99,11 +109,57 @@ _BC = {
 }
 
 
+# YAML key names in paper_config.yaml -> PPOConfig field names
+_YAML_TO_PPO: Dict[str, str] = {
+    "num_envs": "num_envs",
+    "horizon": "horizon",
+    "num_minibatches": "num_minibatches",
+    "num_epochs": "num_epochs",
+    "learning_rate": "learning_rate",
+    "gamma": "gamma",
+    "gae_lambda": "gae_lambda",
+    "clip_eps": "clip_eps",
+    "entropy_coef": "ent_coef",
+    "value_coef": "vf_coef",
+    "max_grad_norm": "max_grad_norm",
+    "rew_shaping_horizon": "rew_shaping_horizon",
+    "total_timesteps": "total_timesteps",
+}
+
+
+def _get_ppo_sp_from_yaml(layout: str) -> Optional[Dict[str, Any]]:
+    """Load PPO SP hparams from paper_config.yaml (ppo_defaults + ppo_sp_layout_overrides).
+    Returns a dict keyed by PPOConfig field names so train_ppo_sp can pass them directly.
+    Returns None if file or layout missing.
+    """
+    if not _PAPER_CONFIG_PATH.is_file():
+        return None
+    raw = yaml.safe_load(_PAPER_CONFIG_PATH.read_text()) or {}
+    defaults = raw.get("ppo_defaults") or {}
+    layout_overrides = (raw.get("ppo_sp_layout_overrides") or {}).get(layout)
+    if layout_overrides is None:
+        return None
+    merged = {**defaults, **layout_overrides}
+    out: Dict[str, Any] = {}
+    for yaml_key, ppo_key in _YAML_TO_PPO.items():
+        if yaml_key not in merged:
+            continue
+        val = merged[yaml_key]
+        if ppo_key in ("num_envs", "horizon", "num_minibatches", "num_epochs", "rew_shaping_horizon", "total_timesteps"):
+            out[ppo_key] = int(val)
+        else:
+            out[ppo_key] = float(val)
+    return out
+
+
 def get_hparams(alg: str, layout: Optional[str] = None) -> dict:
     """Get paper-locked hyperparameters by algorithm and optional layout."""
     if alg == "ppo_sp":
         if layout not in _PPO_SP:
             raise KeyError(f"Unsupported layout '{layout}' for alg '{alg}'")
+        from_yaml = _get_ppo_sp_from_yaml(layout)
+        if from_yaml is not None:
+            return deepcopy(from_yaml)
         return deepcopy(_PPO_SP[layout])
     if alg == "ppo_bc":
         if layout not in _PPO_BC:

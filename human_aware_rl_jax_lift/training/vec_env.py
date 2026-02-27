@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
+import jax.tree_util
 import jax.numpy as jnp
 import numpy as np
 
@@ -48,7 +49,10 @@ class VectorizedEnv:
         self.reward_shaping_params = reward_shaping_params
         self.randomize_agent_idx = bool(randomize_agent_idx)
 
-        self.states: List[OvercookedState] = [make_initial_state(terrain) for _ in range(self.num_envs)]
+        # Store states as numpy so BCPartner.act() never blocks on device syncs when reading st.timestep etc.
+        self.states: List[OvercookedState] = [
+            jax.tree_util.tree_map(np.asarray, make_initial_state(terrain)) for _ in range(self.num_envs)
+        ]
         self.agent_idx: np.ndarray = np.zeros((self.num_envs,), dtype=np.int32)
         self.last_sparse: np.ndarray = np.zeros((self.num_envs,), dtype=np.float32)
         self.last_shaped: np.ndarray = np.zeros((self.num_envs,), dtype=np.float32)
@@ -74,7 +78,7 @@ class VectorizedEnv:
         return np.asarray(p1_obs, dtype=np.float32), np.asarray(p0_obs, dtype=np.float32)
 
     def _reset_single(self, i: int) -> Tuple[np.ndarray, np.ndarray]:
-        self.states[i] = make_initial_state(self.terrain)
+        self.states[i] = jax.tree_util.tree_map(np.asarray, make_initial_state(self.terrain))
         self.ep_sparse_accum[i] = 0.0
         self.ep_shaped_accum[i] = 0.0
         return self._encode_for_agent_idx(self.states[i], int(self.agent_idx[i]))
@@ -114,7 +118,7 @@ class VectorizedEnv:
                 joint,
                 reward_shaping_params=self.reward_shaping_params,
             )
-            self.states[i] = next_state
+            self.states[i] = jax.tree_util.tree_map(np.asarray, next_state)
 
             sparse_f = float(sparse)
             shaped_scaled_f = float(shaped)

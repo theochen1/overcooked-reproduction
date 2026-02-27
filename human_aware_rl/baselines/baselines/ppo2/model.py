@@ -139,6 +139,9 @@ class Model(object):
                 trunk_cos_act_cri = trunk_dot_act_cri / (trunk_act_norm * trunk_cri_norm + 1e-12)
                 trunk_actor_share_total = trunk_act_norm / (trunk_tot_norm + 1e-12)
                 trunk_critic_share_total = trunk_cri_norm / (trunk_tot_norm + 1e-12)
+                trunk_norm_sum_act_cri = trunk_act_norm + trunk_cri_norm
+                trunk_cancellation_frac = 1.0 - (trunk_tot_norm / (trunk_norm_sum_act_cri + 1e-12))
+                trunk_cancellation_ratio = trunk_norm_sum_act_cri / (trunk_tot_norm + 1e-12)
             else:
                 zero = tf.constant(0.0, dtype=tf.float32)
                 trunk_tot_norm = zero
@@ -147,6 +150,17 @@ class Model(object):
                 trunk_cos_act_cri = zero
                 trunk_actor_share_total = zero
                 trunk_critic_share_total = zero
+                trunk_norm_sum_act_cri = zero
+                trunk_cancellation_frac = zero
+                trunk_cancellation_ratio = zero
+
+            if max_grad_norm is not None:
+                clip_coef = tf.minimum(1.0, max_grad_norm / (raw_global_norm + 1e-12))
+            else:
+                clip_coef = tf.constant(1.0, dtype=tf.float32)
+            trunk_tot_norm_postclip = trunk_tot_norm * clip_coef
+            trunk_act_norm_postclip = trunk_act_norm * clip_coef
+            trunk_cri_norm_postclip = trunk_cri_norm * clip_coef
 
             trunk_decomp_names = [
                 "trunk_grad_norm_total",
@@ -155,6 +169,13 @@ class Model(object):
                 "trunk_grad_cos_actor_critic",
                 "trunk_grad_actor_share_total",
                 "trunk_grad_critic_share_total",
+                "trunk_grad_norm_sum_actor_critic",
+                "trunk_grad_cancellation_frac",
+                "trunk_grad_cancellation_ratio",
+                "grad_clip_coef",
+                "trunk_grad_norm_total_postclip",
+                "trunk_grad_norm_actor_postclip",
+                "trunk_grad_norm_critic_postclip",
             ]
             trunk_decomp_tensors = [
                 trunk_tot_norm,
@@ -163,6 +184,13 @@ class Model(object):
                 trunk_cos_act_cri,
                 trunk_actor_share_total,
                 trunk_critic_share_total,
+                trunk_norm_sum_act_cri,
+                trunk_cancellation_frac,
+                trunk_cancellation_ratio,
+                clip_coef,
+                trunk_tot_norm_postclip,
+                trunk_act_norm_postclip,
+                trunk_cri_norm_postclip,
             ]
 
         if max_grad_norm is not None:

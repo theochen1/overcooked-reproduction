@@ -40,16 +40,17 @@ ppo_defaults:
   gamma: 0.99
   gae_lambda: 0.98
   clip_eps: 0.05
-  entropy_coef: 0.1
+  entropy_coef: 0.01
   value_coef: 0.5
-  max_grad_norm: 0.1
+  max_grad_norm: 1
 
+# PPO SP: layout-specific hyperparams + env timestep budget (Fig. 8, page 14).
 ppo_sp_layout_overrides:
-  simple:    {learning_rate: 1.0e-3, value_coef: 0.5}
-  unident_s: {learning_rate: 1.0e-3, value_coef: 0.5}
-  random1:   {learning_rate: 6.0e-4, value_coef: 0.5}
-  random0:   {learning_rate: 8.0e-4, value_coef: 0.5}
-  random3:   {learning_rate: 8.0e-4, value_coef: 0.5}
+  simple:    {learning_rate: 1.0e-3, value_coef: 0.5, rew_shaping_horizon: 2500000, total_timesteps: 6000000}
+  unident_s: {learning_rate: 1.0e-3, value_coef: 0.5, rew_shaping_horizon: 2500000, total_timesteps: 7000000}
+  random1:   {learning_rate: 6.0e-4, value_coef: 0.5, rew_shaping_horizon: 3500000, total_timesteps: 10000000}
+  random0:   {learning_rate: 8.0e-4, value_coef: 0.5, rew_shaping_horizon: 2500000, total_timesteps: 7000000}
+  random3:   {learning_rate: 8.0e-4, value_coef: 0.5, rew_shaping_horizon: 2500000, total_timesteps: 8000000}
 
 ppo_bc_layout_overrides:
   simple:    {learning_rate: 1.0e-3, lr_annealing: 3.0, value_coef: 0.5, num_minibatches: 10, rew_shaping_horizon: 1000000,  self_play_horizon: [500000,  3000000]}

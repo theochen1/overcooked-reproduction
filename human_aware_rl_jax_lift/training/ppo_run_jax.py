@@ -140,6 +140,7 @@ def _run_update_epochs(
     *,
     normalize_advantages: bool = True,
     compute_trunk_grad_decomp: bool = False,
+    adv_norm_fp64: bool = False,
 ):
     """Run config.num_epochs passes; return updated train_state and mean metrics."""
     batch_size = obs_flat.shape[0]
@@ -162,6 +163,7 @@ def _run_update_epochs(
                 config=config,
                 normalize_advantages=normalize_advantages,
                 compute_trunk_grad_decomp=compute_trunk_grad_decomp,
+                adv_norm_fp64=adv_norm_fp64,
             )
             # Keep metrics as JAX arrays — NO float() here.
             all_metrics.append(metrics)
@@ -336,6 +338,12 @@ def ppo_run_jax(
                 "trunk_grad_cos_actor_critic": [],
                 "trunk_grad_actor_share_total": [],
                 "trunk_grad_critic_share_total": [],
+                "trunk_grad_norm_sum_actor_critic": [],
+                "trunk_grad_cancellation_frac": [],
+                "trunk_grad_cancellation_ratio": [],
+                "trunk_grad_norm_total_postclip": [],
+                "trunk_grad_norm_actor_postclip": [],
+                "trunk_grad_norm_critic_postclip": [],
             })
         probe_obs = None
         best_sparse = float("-inf")
@@ -402,6 +410,7 @@ def ppo_run_jax(
                 config, update_rng,
                 normalize_advantages=not config.global_adv_norm,
                 compute_trunk_grad_decomp=diagnostics,
+                adv_norm_fp64=config.adv_norm_fp64,
             )
             mean_metrics.update(_update_delta_norms(params_before_update, train_state.params))
             if diagnostics and probe_obs is not None:
@@ -499,6 +508,12 @@ def ppo_run_jax(
                     "trunk_grad_cos_actor_critic",
                     "trunk_grad_actor_share_total",
                     "trunk_grad_critic_share_total",
+                    "trunk_grad_norm_sum_actor_critic",
+                    "trunk_grad_cancellation_frac",
+                    "trunk_grad_cancellation_ratio",
+                    "trunk_grad_norm_total_postclip",
+                    "trunk_grad_norm_actor_postclip",
+                    "trunk_grad_norm_critic_postclip",
                 ):
                     logs[k].append(float(mean_metrics.get(k, 0.0)))
 
@@ -558,6 +573,12 @@ def ppo_run_jax(
                     "trunk_grad_cos_actor_critic": mean_metrics.get("trunk_grad_cos_actor_critic", 0.0),
                     "trunk_grad_actor_share_total": mean_metrics.get("trunk_grad_actor_share_total", 0.0),
                     "trunk_grad_critic_share_total": mean_metrics.get("trunk_grad_critic_share_total", 0.0),
+                    "trunk_grad_norm_sum_actor_critic": mean_metrics.get("trunk_grad_norm_sum_actor_critic", 0.0),
+                    "trunk_grad_cancellation_frac": mean_metrics.get("trunk_grad_cancellation_frac", 0.0),
+                    "trunk_grad_cancellation_ratio": mean_metrics.get("trunk_grad_cancellation_ratio", 0.0),
+                    "trunk_grad_norm_total_postclip": mean_metrics.get("trunk_grad_norm_total_postclip", 0.0),
+                    "trunk_grad_norm_actor_postclip": mean_metrics.get("trunk_grad_norm_actor_postclip", 0.0),
+                    "trunk_grad_norm_critic_postclip": mean_metrics.get("trunk_grad_norm_critic_postclip", 0.0),
                 })
             # Anneal shaping AFTER logging (matches TF baseline order:
             # rollout → PPO update → log → update shaping for next rollout).
