@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
+import jax
 import jax.tree_util
 import jax.numpy as jnp
 import numpy as np
@@ -33,6 +34,15 @@ class VectorizedEnv:
     - `obs0` is always for the training agent
     - `obs1` is always for the other agent
     - environment randomizes `agent_idx` on reset
+
+    Performance note
+    ----------------
+    This class is intentionally "legacy-faithful" and stores env states as NumPy.
+    On GPU backends, calling `env_step` and then converting results back to NumPy
+    can incur repeated device<->host synchronizations (very slow).
+
+    If you want fast GPU rollouts, use the fully-JAX batched env in vec_env_jax.py
+    and scan-based runner in runner_jax.py.
     """
 
     def __init__(
@@ -58,6 +68,10 @@ class VectorizedEnv:
         self.last_shaped: np.ndarray = np.zeros((self.num_envs,), dtype=np.float32)
         self.ep_sparse_accum: np.ndarray = np.zeros((self.num_envs,), dtype=np.float32)
         self.ep_shaped_accum: np.ndarray = np.zeros((self.num_envs,), dtype=np.float32)
+
+        # Diagnostics
+        self._step_calls = 0
+        self._diag_enabled = bool(int(np.environ.get("HARL_VECENV_DIAG", "1")))
 
     def _sample_agent_idx(self) -> np.ndarray:
         if not self.randomize_agent_idx:
@@ -99,12 +113,35 @@ class VectorizedEnv:
 
         `training_actions` and `other_actions` are action indices in [0, 5].
         """
+        if self._diag_enabled and self._step_calls == 0:
+            backend = jax.default_backend()
+            print(f"[vec_env] backend={backend} num_envs={self.num_envs} horizon={self.horizon}", flush=True)
+            if backend == "cuda":
+                print(
+                    "[vec_env] WARNING: VectorizedEnv is NumPy-state + Python loop; on GPU this can be extremely slow "
+                    "due to repeated device<->host syncs. Prefer vec_env_jax/runner_jax for GPU rollouts. "
+                    "(Set HARL_VECENV_DIAG=0 to disable this message.)",
+                    flush=True,
+                )
+
+        t_step0 = None
+        if self._diag_enabled and self._step_calls < 3:
+            import time
+            t_step0 = time.time()
+            t_env = 0.0
+            t_encode = 0.0
+            t_py = 0.0
+
         obs0_list, obs1_list = [], []
         rewards = np.zeros((self.num_envs,), dtype=np.float32)
         dones = np.zeros((self.num_envs,), dtype=np.bool_)
         infos: List[Dict[str, object]] = []
 
         for i in range(self.num_envs):
+            if t_step0 is not None:
+                import time
+                t_i0 = time.time()
+
             ta = int(training_actions[i])
             oa = int(other_actions[i])
             if int(self.agent_idx[i]) == 0:
@@ -112,12 +149,18 @@ class VectorizedEnv:
             else:
                 joint = jnp.array([oa, ta], dtype=jnp.int32)
 
+            if t_step0 is not None:
+                import time
+                t1 = time.time()
+
             next_state, sparse, shaped, info = env_step(
                 self.terrain,
                 self.states[i],
                 joint,
                 reward_shaping_params=self.reward_shaping_params,
             )
+
+            # NOTE: the conversions below can force a device->host sync on GPU
             self.states[i] = jax.tree_util.tree_map(np.asarray, next_state)
 
             sparse_f = float(sparse)
@@ -159,7 +202,14 @@ class VectorizedEnv:
             dones[i] = done
             infos.append(info_out)
 
-        return VecStepOut(
+            if t_step0 is not None:
+                import time
+                t2 = time.time()
+                t_env += (t2 - t1)
+                # encode time is included in t_env block above; approximate remaining python overhead here
+                t_py += (t1 - t_i0)
+
+        out = VecStepOut(
             states=self.states,
             obs0=np.stack(obs0_list),
             obs1=np.stack(obs1_list),
@@ -168,3 +218,15 @@ class VectorizedEnv:
             infos=infos,
             other_agent_env_idx=1 - self.agent_idx.copy(),
         )
+
+        if t_step0 is not None:
+            import time
+            dt = time.time() - t_step0
+            print(
+                f"[vec_env] step_all call {self._step_calls} took {dt:.2f}s "
+                f"(env_step+sync approx {t_env:.2f}s across {self.num_envs} envs)",
+                flush=True,
+            )
+
+        self._step_calls += 1
+        return out
