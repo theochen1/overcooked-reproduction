@@ -226,9 +226,10 @@ def ppo_run_jax(
         print(f"[{_ts(t0)}] Creating train state...")
         sys.stdout.flush()
         if lr_annealing != 1.0:
+            # TF Baselines: anneal from lr to lr / lr_annealing (reduction factor)
             lr_schedule = optax.linear_schedule(
                 init_value=config.learning_rate,
-                end_value=config.learning_rate * float(lr_annealing),
+                end_value=config.learning_rate / float(lr_annealing),
                 transition_steps=max(1, num_updates * config.num_epochs * config.num_minibatches),
             )
             train_state = create_train_state(rng, obs_shape, config, learning_rate=lr_schedule)

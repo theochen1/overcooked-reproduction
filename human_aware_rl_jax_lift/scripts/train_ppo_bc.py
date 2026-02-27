@@ -52,6 +52,9 @@ def main() -> None:
         num_minibatches=int(overrides["num_minibatches"]),
         rew_shaping_horizon=int(overrides["rew_shaping_horizon"]),
         self_play_horizon=self_play_horizon,
+        randomize_agent_idx=bool(overrides.get("randomize_agent_idx", False)),
+        ent_coef=float(overrides.get("ent_coef", 0.01)),
+        max_grad_norm=float(overrides.get("max_grad_norm", 0.1)),
     )
     run_name = f"ppo_bc_{args.bc_split}_{args.layout}"
     if args.jax:

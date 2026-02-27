@@ -124,6 +124,7 @@ _YAML_TO_PPO: Dict[str, str] = {
     "max_grad_norm": "max_grad_norm",
     "rew_shaping_horizon": "rew_shaping_horizon",
     "total_timesteps": "total_timesteps",
+    "randomize_agent_idx": "randomize_agent_idx",
 }
 
 
@@ -145,7 +146,9 @@ def _get_ppo_sp_from_yaml(layout: str) -> Optional[Dict[str, Any]]:
         if yaml_key not in merged:
             continue
         val = merged[yaml_key]
-        if ppo_key in ("num_envs", "horizon", "num_minibatches", "num_epochs", "rew_shaping_horizon", "total_timesteps"):
+        if ppo_key == "randomize_agent_idx":
+            out[ppo_key] = bool(val)
+        elif ppo_key in ("num_envs", "horizon", "num_minibatches", "num_epochs", "rew_shaping_horizon", "total_timesteps"):
             out[ppo_key] = int(val)
         else:
             out[ppo_key] = float(val)
@@ -164,7 +167,29 @@ def get_hparams(alg: str, layout: Optional[str] = None) -> dict:
     if alg == "ppo_bc":
         if layout not in _PPO_BC:
             raise KeyError(f"Unsupported layout '{layout}' for alg '{alg}'")
-        return deepcopy(_PPO_BC[layout])
+        result = deepcopy(_PPO_BC[layout])
+        # Merge paper_config.yaml: ppo_defaults (ent_coef, max_grad_norm, etc.) + ppo_bc_layout_overrides
+        if _PAPER_CONFIG_PATH.is_file():
+            raw = yaml.safe_load(_PAPER_CONFIG_PATH.read_text()) or {}
+            defaults = raw.get("ppo_defaults") or {}
+            bc_overrides = (raw.get("ppo_bc_layout_overrides") or {}).get(layout) or {}
+            # Paper PPO defaults (same as PPO_SP)
+            if "entropy_coef" in defaults:
+                result["ent_coef"] = float(defaults["entropy_coef"])
+            if "max_grad_norm" in defaults:
+                result["max_grad_norm"] = float(defaults["max_grad_norm"])
+            # Layout overrides (may override defaults)
+            for yaml_key, ppo_key in _YAML_TO_PPO.items():
+                if yaml_key not in bc_overrides:
+                    continue
+                val = bc_overrides[yaml_key]
+                if ppo_key == "randomize_agent_idx":
+                    result[ppo_key] = bool(val)
+                elif ppo_key in ("num_envs", "horizon", "num_minibatches", "num_epochs", "rew_shaping_horizon", "total_timesteps"):
+                    result[ppo_key] = int(val)
+                else:
+                    result[ppo_key] = float(val)
+        return result
     if alg == "pbt":
         return deepcopy(_PBT)
     if alg == "bc":
