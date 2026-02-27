@@ -1,27 +1,8 @@
 """On-device rollout via jax.lax.scan — eliminates the Python step loop.
 
-Previous design (runner.py)
----------------------------
-  for step in range(horizon):            # 400 Python iterations
-      actions = policy_step(obs)         # GPU->CPU: actions, values, logp
-      other  = partner.act(obs1)         # GPU->CPU
-      step_out = vec_env.step_all(...)   # 90 device-to-host syncs
-
-This design
------------
-  rollout_data, final_state = jax.lax.scan(scan_step, init, None, horizon)
-
-Everything — forward pass, env step, obs encoding — stays on device for the
-entire horizon.  The only host transfer is the single ``jnp.asarray`` of the
-numpy obs at the very start, and the final readout of the rollout arrays for
-GAE / PPO update.
-
-Self-play note
---------------
-BCPartner uses a Python loop internally (stuck detection, featurize_state_64)
-and cannot be scanned.  For now ``make_rollout_fn`` only supports self-play
-(``other_agent_type='sp'``) inside the scan.  BC-partner rollouts fall back
-to the old runner.py automatically via ``ppo_run.py``.
+Supports self-play (other_agent = same policy) and BC partner (other_agent =
+batched BC policy from featurize_state_64 + BCPolicy). BC path is fully vmapped
+(no stuck detection in scan).
 """
 
 from dataclasses import dataclass
@@ -32,8 +13,11 @@ import jax.numpy as jnp
 import numpy as np
 from flax.training.train_state import TrainState
 
-from .vec_env_jax import BatchedEnvState, batched_step, encode_obs
+from human_aware_rl_jax_lift.agents.bc.model import BCPolicy
+from human_aware_rl_jax_lift.encoding.bc_features import featurize_state_64
 from human_aware_rl_jax_lift.env.state import Terrain
+
+from .vec_env_jax import BatchedEnvState, batched_step, encode_obs
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +62,7 @@ def make_rollout_fn(
     *,
     randomize_agent_idx: bool = False,
     bootstrap_with_zero_obs: bool = False,
+    bc_params: Optional[dict] = None,
 ):
     """
     Return a JIT-compiled function::
@@ -86,14 +71,8 @@ def make_rollout_fn(
             train_state, bstate, obs0, shaping_factor, sp_factor, rng
         )
 
-    Parameters
-    ----------
-    terrain        : static Terrain pytree (treated as static by XLA)
-    horizon        : rollout length (static — determines scan unroll count)
-    num_envs       : number of parallel envs (static)
-
-    The returned function is suitable for both the first call (which triggers
-    XLA compilation) and all subsequent calls (which reuse the compiled kernel).
+    If bc_params is not None, the other agent uses BC (with sp_factor blending
+    SP vs BC). Otherwise pure self-play.
     """
 
     def _rollout(
@@ -106,7 +85,7 @@ def make_rollout_fn(
     ):
         def scan_step(carry, _):
             bstate, obs0, obs1, rng = carry
-            rng, rng_train, rng_other, rng_sp_mix, rng_reset = jax.random.split(rng, 5)
+            rng, rng_train, rng_other_sp, rng_other_bc, rng_sp_mix, rng_reset = jax.random.split(rng, 6)
 
             # ---- Training-agent forward pass --------------------------------
             logits, values = train_state.apply_fn(train_state.params, obs0)
@@ -115,14 +94,21 @@ def make_rollout_fn(
             logp_all = jax.nn.log_softmax(logits)
             logp = logp_all[jnp.arange(num_envs), actions]  # [N]
 
-            # ---- Other-agent forward pass (self-play) -----------------------
-            # sp_factor controls mix: 1.0 = pure SP, 0.0 = always use obs1
-            # (for BC-partner support, fall back to old runner; see docstring)
+            # ---- Other-agent: self-play and optionally BC --------------------
             logits_other, _ = train_state.apply_fn(train_state.params, obs1)
-            other_actions_sp = jax.random.categorical(rng_other, logits_other).astype(jnp.int32)
-            # When sp_factor < 1 we could blend with a BC policy here;
-            # for now, pure self-play: other_actions = sp actions.
-            other_actions = other_actions_sp
+            other_actions_sp = jax.random.categorical(rng_other_sp, logits_other).astype(jnp.int32)
+
+            if bc_params is not None:
+                f0, f1 = jax.vmap(featurize_state_64, in_axes=(None, 0))(terrain, bstate.states)
+                other_feats = jnp.where(
+                    bstate.agent_idx[:, None] == 0, f1, f0
+                ).astype(jnp.float32)
+                logits_bc = BCPolicy().apply(bc_params, other_feats)
+                other_actions_bc = jax.random.categorical(rng_other_bc, logits_bc).astype(jnp.int32)
+                use_sp = jax.random.uniform(rng_sp_mix, ()) < sp_factor
+                other_actions = jnp.where(use_sp, other_actions_sp, other_actions_bc)
+            else:
+                other_actions = other_actions_sp
 
             # ---- Environment step (vmapped, on-device) ----------------------
             reset_keys = jax.random.split(rng_reset, num_envs)

@@ -194,15 +194,9 @@ def ppo_run_jax(
     diagnostics: bool = False,
 ) -> List[dict]:
     """
-    JAX-optimised PPO training loop (self-play only).
-    Falls back to ppo_run.py for BC-partner modes.
+    JAX-optimised PPO training loop. Supports self-play (other_agent_type='sp')
+    and BC partner (other_agent_type='bc_train' or 'bc_test') with batched BC in scan.
     """
-    if other_agent_type != "sp":
-        raise ValueError(
-            f"ppo_run_jax only supports other_agent_type='sp'; "
-            f"got '{other_agent_type}'. Use ppo_run() for BC-partner training."
-        )
-
     t0 = time.time()
 
     if self_play_horizon is None:
@@ -212,12 +206,27 @@ def ppo_run_jax(
     if lr_annealing is None:
         lr_annealing = config.lr_annealing
 
+    # Load BC params when using BC partner (for batched rollout)
+    bc_params = None
+    if other_agent_type in ("bc_train", "bc_test"):
+        if best_bc_model_paths is None:
+            raise ValueError("best_bc_model_paths required for BC-partner JAX runs")
+        split = "train" if other_agent_type == "bc_train" else "test"
+        bc_path = Path(best_bc_model_paths[split][layout_name])
+        if bc_path.is_dir():
+            bc_path = bc_path / "model.pkl"
+        with bc_path.open("rb") as f:
+            payload = pickle.load(f)
+        bc_params = payload.get("params", payload) if isinstance(payload, dict) else payload
+        print(f"[{_ts(t0)}] Loaded BC params from {bc_path} (split={split})")
+        sys.stdout.flush()
+
     print(f"[{_ts(t0)}] Parsing layout: {layout_name}")
     terrain = parse_layout(layout_name)
     print(f"[{_ts(t0)}] Layout parsed.")
     sys.stdout.flush()
 
-    run_name = ex_name or f"ppo_sp_jax_{layout_name}"
+    run_name = ex_name or f"ppo_{other_agent_type}_jax_{layout_name}"
     root_dir = Path(save_dir) / run_name
     root_dir.mkdir(parents=True, exist_ok=True)
     with (root_dir / "config.pkl").open("wb") as f:
@@ -293,6 +302,7 @@ def ppo_run_jax(
             num_envs=config.num_envs,
             randomize_agent_idx=config.randomize_agent_idx,
             bootstrap_with_zero_obs=config.bootstrap_with_zero_obs,
+            bc_params=bc_params,
         )
 
         # ---- Logging buffers -------------------------------------------------

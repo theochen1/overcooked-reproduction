@@ -63,11 +63,13 @@ if [ ! -f "$BC_PATHS_FILE" ]; then
     echo "ERROR: $BC_PATHS_FILE missing — BC stage must complete first" && exit 1
 fi
 
-python scripts/train_ppo_bc.py \
+# Use fully-JAX rollout (vec_env_jax + runner_jax) for GPU; avoids legacy Python step loop.
+python -u scripts/train_ppo_bc.py \
     --layout        "$LAYOUT" \
     --bc_split      "$SPLIT" \
     --seeds         "${SEEDS[@]}" \
     --bc_paths_file "$BC_PATHS_FILE" \
-    --save_dir      data/ppo_runs
+    --save_dir      data/ppo_runs \
+    --jax
 
 echo "Done: $(date)"
