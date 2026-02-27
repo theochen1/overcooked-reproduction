@@ -40,6 +40,8 @@ conda activate overcooked
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+# Optional: reduce XLA autotuner warning spam (dot_search_space fallback); harmless to leave unset
+# export TF_CPP_MIN_LOG_LEVEL=2
 
 echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -1)"
 

@@ -15,11 +15,14 @@
 # This array requests 16 CPUs per task; the "%2" throttles concurrency to
 # keep total CPUs <= 32 across the array (avoids QOSMaxCpuPerUserLimit).
 
+# Hyperparameters and seeds come from paper_config.yaml (loaded by train_ppo_sp.py via get_hparams).
+# Layouts and seeds must match paper_config.yaml (environment.layouts and seeds.ppo_sp).
 LAYOUTS=(simple unident_s random0 random1 random3)
 PPO_SP_SEEDS=(2229 7649 7225 9807 386)
 
 LAYOUT=${LAYOUTS[$SLURM_ARRAY_TASK_ID]}
 echo "Task=$SLURM_ARRAY_TASK_ID layout=$LAYOUT"
+echo "total_timesteps per layout from paper_config.yaml (Fig. 8)"
 echo "Node: $(hostname) | Start: $(date)"
 
 module load cuda/12.1 2>/dev/null || true
@@ -51,9 +54,9 @@ mkdir -p "$SLURM_SUBMIT_DIR/../logs"
 cd "$SLURM_SUBMIT_DIR/.."
 
 python -u scripts/train_ppo_sp.py \
-    --layout    "$LAYOUT" \
-    --seeds     "${PPO_SP_SEEDS[@]}" \
-    --save_dir  data/ppo_runs \
+    --layout   "$LAYOUT" \
+    --seeds    "${PPO_SP_SEEDS[@]}" \
+    --save_dir data/ppo_runs \
     --jax
 
 echo "Done: $(date)"
