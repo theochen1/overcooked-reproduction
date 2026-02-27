@@ -30,14 +30,14 @@ fi
 # Fixed hyperparams
 LR="${LR:-8.0e-4}"
 VF_COEF="${VF_COEF:-0.05}"
-LAYOUT="${LAYOUT:-random0}"
+LAYOUT="${LAYOUT:-simple}"
 TOTAL_TIMESTEPS="${TOTAL_TIMESTEPS:-7000000}"
 PPO_SP_SEEDS=(2229 7649 7225 9807 386)
 
 # Ranges: one value per dimension (array index flattens ENT x CLIP x MGN)
-ENT_COEFS=(0.03)
-CLIP_EPS_RANGE=(0.1 0.2 0.5)
-MAX_GRAD_NORM_RANGE=(0.1 0.3 0.5)
+ENT_COEFS=(0.01 0.05 0.1 0.5)
+CLIP_EPS_RANGE=(0.05)
+MAX_GRAD_NORM_RANGE=(0.1)
 
 N_ENT=${#ENT_COEFS[@]}
 N_CLIP=${#CLIP_EPS_RANGE[@]}
