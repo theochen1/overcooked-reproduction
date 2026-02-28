@@ -294,38 +294,52 @@ def test_multi_episode_reset_parity(layout):
 def test_uniform_policy_statistics():
     """Run 30 envs × 400 steps with uniform-random actions on 'simple' layout.
 
-    Prints per-episode sparse/shaped/total reward stats so you can compare
-    against a TF uniform-policy run.  No assertion — purely diagnostic.
+    Uses the functional API (make_batched_state, batched_step, encode_obs) from
+    training/vec_env.py. Prints per-episode sparse/shaped/total reward stats so
+    you can compare against a TF uniform-policy run.  No assertion — purely diagnostic.
     """
-    from human_aware_rl_jax_lift.env.vec_env import VectorizedEnv
-
     layout = "simple"
     terrain = parse_layout(layout)
     num_envs = 30
     horizon = 400
     seed = 2229
 
-    vec_env = VectorizedEnv(
-        terrain, num_envs, horizon,
-        reward_shaping_params=None,
+    rng = jax.random.PRNGKey(seed)
+    rng, init_rng = jax.random.split(rng)
+    bstate = make_batched_state(
+        terrain, num_envs, init_rng,
         randomize_agent_idx=False,
     )
-    _, obs0, obs1, _ = vec_env.reset_all()
+    obs0, obs1 = encode_obs(terrain, bstate)
 
-    rng = np.random.RandomState(seed)
+    action_rng = np.random.RandomState(seed)
     ep_sparse_returns = []
     ep_shaped_returns = []
     ep_total_returns = []
 
+    shaping_factor = jnp.array(1.0, dtype=jnp.float32)
+
     for _ in range(horizon):
-        ta = rng.randint(0, 6, size=num_envs).astype(np.int32)
-        oa = rng.randint(0, 6, size=num_envs).astype(np.int32)
-        step_out = vec_env.step_all(ta, oa)
-        for info in step_out.infos:
-            if "episode" in info:
-                ep_sparse_returns.append(info["episode"]["ep_sparse_r"])
-                ep_shaped_returns.append(info["episode"]["ep_shaped_r"])
-                ep_total_returns.append(info["episode"]["r"])
+        ta = jnp.asarray(action_rng.randint(0, 6, size=num_envs), dtype=jnp.int32)
+        oa = jnp.asarray(action_rng.randint(0, 6, size=num_envs), dtype=jnp.int32)
+        rng, step_rng = jax.random.split(rng)
+        reset_keys = jnp.stack(jax.random.split(step_rng, num_envs))
+
+        bstate_old = bstate
+        bstate, obs0, obs1, rewards, dones, sparse_r = batched_step(
+            terrain, bstate, ta, oa, reset_keys, shaping_factor, horizon,
+            randomize_agent_idx=False,
+        )
+
+        dones_np = np.asarray(dones)
+        for i in range(num_envs):
+            if dones_np[i]:
+                ep_sparse = float(bstate_old.ep_sparse_accum[i]) + float(sparse_r[i])
+                ep_shaped = float(bstate_old.ep_shaped_accum[i]) + float(rewards[i] - sparse_r[i])
+                ep_total = float(bstate_old.ep_sparse_accum[i]) + float(bstate_old.ep_shaped_accum[i]) + float(rewards[i])
+                ep_sparse_returns.append(ep_sparse)
+                ep_shaped_returns.append(ep_shaped)
+                ep_total_returns.append(ep_total)
 
     n_eps = len(ep_sparse_returns)
     print(f"\n[simple] Uniform-policy rollout: {n_eps} episodes completed")
