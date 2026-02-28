@@ -47,7 +47,7 @@ ppo_defaults:
 # PPO SP: layout-specific hyperparams + env timestep budget (Fig. 8, page 14).
 # randomize_agent_idx: true so training agent is P0 or P1 at random each episode.
 ppo_sp_layout_overrides:
-  simple:    {learning_rate: 1.0e-3, value_coef: 0.5, rew_shaping_horizon: 2500000, total_timesteps: 6000000, randomize_agent_idx: true}
+  simple:    {learning_rate: 1.0e-3, value_coef: 0.05, rew_shaping_horizon: 2500000, total_timesteps: 6000000, randomize_agent_idx: true}
   unident_s: {learning_rate: 1.0e-3, value_coef: 0.5, rew_shaping_horizon: 2500000, total_timesteps: 7000000, randomize_agent_idx: true}
   random1:   {learning_rate: 6.0e-4, value_coef: 0.5, rew_shaping_horizon: 3500000, total_timesteps: 10000000, randomize_agent_idx: true}
   random0:   {learning_rate: 8.0e-4, value_coef: 0.5, rew_shaping_horizon: 2500000, total_timesteps: 7000000, randomize_agent_idx: true}
@@ -55,11 +55,11 @@ ppo_sp_layout_overrides:
 
 # PPO BC: randomize_agent_idx: false so training agent is fixed (paper convention for BC partner).
 ppo_bc_layout_overrides:
-  simple:    {learning_rate: 1.0e-3, lr_annealing: 3.0, value_coef: 0.5, num_minibatches: 10, rew_shaping_horizon: 1000000,  self_play_horizon: [500000,  3000000], randomize_agent_idx: false}
-  unident_s: {learning_rate: 1.0e-3, lr_annealing: 3.0, value_coef: 0.5, num_minibatches: 12, rew_shaping_horizon: 6000000,  self_play_horizon: [1000000, 7000000], randomize_agent_idx: false}
-  random1:   {learning_rate: 1.0e-3, lr_annealing: 1.5, value_coef: 0.5, num_minibatches: 15, rew_shaping_horizon: 5000000,  self_play_horizon: [2000000, 6000000], randomize_agent_idx: false}
-  random0:   {learning_rate: 1.5e-3, lr_annealing: 2.0, value_coef: 0.1, num_minibatches: 15, rew_shaping_horizon: 4000000,  self_play_horizon: null, randomize_agent_idx: false}
-  random3:   {learning_rate: 1.5e-3, lr_annealing: 3.0, value_coef: 0.1, num_minibatches: 15, rew_shaping_horizon: 4000000,  self_play_horizon: [1000000, 4000000], randomize_agent_idx: false}
+  simple:    {learning_rate: 1.0e-3, lr_annealing: 3.0, value_coef: 0.5, num_minibatches: 10, rew_shaping_horizon: 1000000,  self_play_horizon: [500000,  3000000], randomize_agent_idx: true}
+  unident_s: {learning_rate: 1.0e-3, lr_annealing: 3.0, value_coef: 0.5, num_minibatches: 12, rew_shaping_horizon: 6000000,  self_play_horizon: [1000000, 7000000], randomize_agent_idx: true}
+  random1:   {learning_rate: 1.0e-3, lr_annealing: 1.5, value_coef: 0.5, num_minibatches: 15, rew_shaping_horizon: 5000000,  self_play_horizon: [2000000, 6000000], randomize_agent_idx: true}
+  random0:   {learning_rate: 1.5e-3, lr_annealing: 2.0, value_coef: 0.1, num_minibatches: 15, rew_shaping_horizon: 4000000,  self_play_horizon: null, randomize_agent_idx: true}
+  random3:   {learning_rate: 1.5e-3, lr_annealing: 3.0, value_coef: 0.1, num_minibatches: 15, rew_shaping_horizon: 4000000,  self_play_horizon: [1000000, 4000000], randomize_agent_idx: true}
 
 pbt_defaults:
   num_envs: 50
