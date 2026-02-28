@@ -31,14 +31,14 @@ This table maps common legacy training-stack concepts to their JAX-native locati
 
 | Legacy/TF concept | Responsibility | JAX lift location | What to inspect |
 | --- | --- | --- | --- |
-| Vectorized env / batched stepping | Maintain N env instances, step/reset them, return reward/done/info | `human_aware_rl_jax_lift.training.runner_jax` | `make_rollout_fn(...)` calls `batched_step(...)` with per-env reset keys and returns tensors + `infos` |
-| Python rollout loop | Collect trajectories (obs, acts, rews, dones, values, logp) over horizon | `human_aware_rl_jax_lift.training.runner_jax` | Rollout is a single `jax.lax.scan` (no Python per-step loop) |
-| Partner policy (self-play) | Partner action distribution from same policy | `human_aware_rl_jax_lift.training.runner_jax` | Partner samples via `jax.random.categorical` from the same policy network |
-| Partner policy (BC) | Partner action distribution from BC logits; optional “unstuck” rule | `human_aware_rl_jax_lift.training.runner_jax` | BC logits from `BCPolicy().apply(...)`, then `_unstuck_adjust_probs(...)`, then sampling |
-| SP-vs-BC mixing | Mix self-play and BC partner based on a scalar probability | `human_aware_rl_jax_lift.training.runner_jax` | Controlled by `sp_factor`; trajectory-level if `trajectory_sp=True` (sample at episode reset and hold) |
+| Vectorized env / batched stepping | Maintain N env instances, step/reset them, return reward/done/info | `human_aware_rl_jax_lift.training.vec_env` | `make_batched_state(...)`, `batched_step(...)`, `encode_obs(...)`; rollout in `runner` calls these inside `jax.lax.scan` |
+| Python rollout loop | Collect trajectories (obs, acts, rews, dones, values, logp) over horizon | `human_aware_rl_jax_lift.training.runner` | Rollout is a single `jax.lax.scan` (no Python per-step loop); `make_rollout_fn(...)` returns the JIT’d rollout |
+| Partner policy (self-play) | Partner action distribution from same policy | `human_aware_rl_jax_lift.training.runner` | Partner samples via `jax.random.categorical` from the same policy network |
+| Partner policy (BC) | Partner action distribution from BC logits; optional “unstuck” rule | `human_aware_rl_jax_lift.training.runner` | BC logits from `BCPolicy().apply(...)`, then `_unstuck_adjust_probs(...)`, then sampling |
+| SP-vs-BC mixing | Mix self-play and BC partner based on a scalar probability | `human_aware_rl_jax_lift.training.runner` | Controlled by `sp_factor`; trajectory-level if `trajectory_sp=True` (sample at episode reset and hold) |
 | PPO driver | Rollout → GAE → minibatch PPO updates → checkpoint/logging | `human_aware_rl_jax_lift.training.ppo_run` | `ppo_run(...)`, `_run_update_epochs(...)`, `compute_gae(...)`, `ppo_update_step(...)` |
 | Reward shaping schedule | Anneal shaped reward contribution over training | `human_aware_rl_jax_lift.training.ppo_run` | `annealed_shaping_factor(...)` updates `shaping_factor` |
-| Training reward metrics | Compute smoothed `eprewmean` and sparse `true_eprew` | `runner_jax` + `ppo_run` | Runner returns `completed_eprew` and `completed_ep_sparse_rew`; PPO buffers them (deque) and logs |
+| Training reward metrics | Compute smoothed `eprewmean` and sparse `true_eprew` | `runner` + `ppo_run` | Runner returns `completed_eprew` and `completed_ep_sparse_rew` in rollout infos; PPO buffers them (deque) and logs |
 | PBT orchestration | Population, selection windows, exploit/explore, weight copying, hparam mutation | `human_aware_rl_jax_lift.training.pbt_run` | `PBTTrainer`, `_evaluate_member(...)`, and member loops |
 | PBT “native JAX” minibatching | Avoid NumPy randomness in minibatch shuffling | `human_aware_rl_jax_lift.training.pbt_run` | Minibatch shuffle uses `jax.random.permutation` with PRNG threading |
 
@@ -72,7 +72,7 @@ When `bc_params` are provided, the rollout includes:
 - **Unstuck rule**: when the partner is “stuck” (repeated position history), the code masks recently-taken actions and renormalizes probabilities.
 - **Mixing semantics**: SP-vs-BC is decided by `sp_factor` and optionally held constant over an episode when `trajectory_sp=True`.
 
-These mechanics are centralized in `human_aware_rl_jax_lift.training.runner_jax`.
+These mechanics are centralized in `human_aware_rl_jax_lift.training.runner`.
 
 ---
 
@@ -85,13 +85,14 @@ These mechanics are centralized in `human_aware_rl_jax_lift.training.runner_jax`
 
 ## Canonical JAX modules
 
-The training directory is intended to be natively JAX:
+The training directory is natively JAX:
 
-- PPO training: `human_aware_rl_jax_lift/training/ppo_run.py`
-- Rollout/partner logic: `human_aware_rl_jax_lift/training/runner_jax.py`
+- PPO training: `human_aware_rl_jax_lift/training/ppo_run.py` (also exported as `ppo_run_jax` for scripts that pass `--jax`)
+- Vectorized env (functional): `human_aware_rl_jax_lift/training/vec_env.py` — `make_batched_state`, `batched_step`, `encode_obs`, `BatchedEnvState`
+- Rollout/partner logic: `human_aware_rl_jax_lift/training/runner.py` — `make_rollout_fn`, scan-based rollout
 - PBT training: `human_aware_rl_jax_lift/training/pbt_run.py`
 
-There is no wrapper module `training/ppo_run_jax.py`, and there is no legacy non-JAX `training/vec_env.py`.
+There is no separate file `training/ppo_run_jax.py`; the JAX implementation lives in `ppo_run.py`. The former stateful `env/vec_env.py` (VectorizedEnv) was removed; the only vectorized env is the functional API in `training/vec_env.py`.
 
 ---
 
