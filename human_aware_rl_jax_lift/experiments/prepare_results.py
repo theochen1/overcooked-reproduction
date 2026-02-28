@@ -1,27 +1,27 @@
 """Aggregate per-layout eval fragments into results_figure4a.json.
 
-This script is called automatically by run_eval_figure4a.sh after all
-Docker evaluation jobs finish.  You can also invoke it manually:
+This script is called automatically by the Figure 4a Slurm pipeline after all
+per-layout evaluation jobs finish. You can also invoke it manually:
 
-    python prepare_results.py \\
-        --aggregate \\
-        --eval_dir  eval_results \\
+    python prepare_results.py \
+        --aggregate \
+        --eval_dir  eval_results \
         --out       results_figure4a.json
 
 Then plot:
-    python figure4a.py \\
-        --results_path results_figure4a.json \\
+    python figure4a.py \
+        --results_path results_figure4a.json \
         --output figure_4a.png
 
 Pipeline overview
 ─────────────────
   run_eval_figure4a.sh
-    └─ docker run … eval_figure4a_inner.py --layout {X}   (×5 layouts)
-         └─ writes eval_results/results_{X}.json
+    └─ sbatch slurm/05_eval_figure4a.slurm (array over 5 layouts)
+         └─ writes experiments/eval_results/results_{layout}.json
   prepare_results.py --aggregate
-    └─ merges the 5 fragments → results_figure4a.json
-  figure4a.py --results_path results_figure4a.json
-    └─ renders figure_4a.png
+    └─ merges the 5 fragments → experiments/results_figure4a.json
+  figure4a.py --results_path experiments/results_figure4a.json
+    └─ renders experiments/figure_4a.png
 """
 
 import argparse
@@ -29,12 +29,13 @@ import json
 from pathlib import Path
 
 # Short layout name (dir convention) → figure4a.py LAYOUT_ORDER key
+# NOTE: This mapping must match the paper layout ordering used by plotting.
 LAYOUT_MAP = {
     "simple":    "cramped_room",
     "unident_s": "asymmetric_advantages",
-    "random0":   "coordination_ring",
-    "random3":   "forced_coordination",
-    "random1":   "counter_circuit",
+    "random1":   "coordination_ring",
+    "random0":   "forced_coordination",
+    "random3":   "counter_circuit",
 }
 
 
