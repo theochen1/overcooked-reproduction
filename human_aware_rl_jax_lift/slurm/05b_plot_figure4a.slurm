@@ -18,6 +18,8 @@ python experiments/prepare_results.py \
   --eval_dir experiments/eval_results \
   --out experiments/results_figure4a.json
 
+# Plot BEST seed (max over seed index) instead of mean over seeds.
 python experiments/figure4a.py \
   --results_path experiments/results_figure4a.json \
+  --seed_agg best \
   --output experiments/figure_4a.png

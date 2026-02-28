@@ -1,10 +1,14 @@
-"""Recreate Figure 4a grouped bar chart from Carroll et al. (NeurIPS 2019)."""
+"""Recreate Figure 4a grouped bar chart from Carroll et al. (NeurIPS 2019).
+
+By default, bars show the mean over 5 seeds with standard error.
+Optionally, you can plot the best seed per condition/layout.
+"""
 
 import argparse
 import json
 import pickle
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -48,6 +52,8 @@ CONDITION_LABELS = {
     "BC_HProxy_sw": "BC+HProxy switched",
 }
 
+SeedAgg = Literal["mean", "best"]
+
 
 def _seed_value(seed_map: Dict[Any, float], seed: int) -> float:
     if seed in seed_map:
@@ -57,15 +63,35 @@ def _seed_value(seed_map: Dict[Any, float], seed: int) -> float:
     raise KeyError(f"Missing seed={seed} in {list(seed_map.keys())}")
 
 
+def _seed_values(seed_map: Dict[Any, float], num_seeds: int = 5) -> np.ndarray:
+    return np.asarray([_seed_value(seed_map, s) for s in range(num_seeds)], dtype=np.float64)
+
+
 def _compute_mean_se(seed_map: Dict[Any, float], num_seeds: int = 5) -> Tuple[float, float]:
-    values = np.asarray([_seed_value(seed_map, s) for s in range(num_seeds)], dtype=np.float64)
+    values = _seed_values(seed_map, num_seeds=num_seeds)
     mean = float(np.mean(values))
     se = float(np.std(values, ddof=1) / np.sqrt(num_seeds))
     return mean, se
 
 
-def compute_stats(results: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Dict[str, float]]]:
-    """Compute mean and standard error per layout/condition."""
+def _compute_best(seed_map: Dict[Any, float], num_seeds: int = 5) -> Tuple[float, float]:
+    values = _seed_values(seed_map, num_seeds=num_seeds)
+    best = float(np.max(values))
+    return best, 0.0
+
+
+def compute_stats(
+    results: Dict[str, Dict[str, Any]],
+    *,
+    seed_agg: SeedAgg = "mean",
+    num_seeds: int = 5,
+) -> Dict[str, Dict[str, Dict[str, float]]]:
+    """Compute per layout/condition stats.
+
+    seed_agg:
+      - "mean": mean over seeds + standard error
+      - "best": max over seeds (se forced to 0)
+    """
     stats: Dict[str, Dict[str, Dict[str, float]]] = {}
     for layout in LAYOUT_ORDER:
         if layout not in results:
@@ -75,15 +101,23 @@ def compute_stats(results: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Dic
         for cond in CONDITION_ORDER:
             if cond not in row:
                 raise KeyError(f"Missing condition '{cond}' for layout '{layout}'")
-            mean, se = _compute_mean_se(row[cond], num_seeds=5)
+            if seed_agg == "best":
+                mean, se = _compute_best(row[cond], num_seeds=num_seeds)
+            else:
+                mean, se = _compute_mean_se(row[cond], num_seeds=num_seeds)
             stats[layout][cond] = {"mean": mean, "se": se}
+
         if "gold_standard" in row and row["gold_standard"] is not None:
+            # Keep gold_standard semantics as a single scalar line.
             stats[layout]["gold_standard"] = {"mean": float(row["gold_standard"]), "se": 0.0}
     return stats
 
 
-def print_summary_table(stats: Dict[str, Dict[str, Dict[str, float]]]) -> None:
-    """Print requested summary table to stdout."""
+def print_summary_table(
+    stats: Dict[str, Dict[str, Dict[str, float]]],
+    *,
+    seed_agg: SeedAgg,
+) -> None:
     cols = ["SP_SP", "SP_HProxy", "PPOBC_HProxy", "BC_HProxy"]
     header = (
         f"{'Layout':<24} | {'SP+SP':>14} | {'SP+HProxy':>14} | "
@@ -96,7 +130,7 @@ def print_summary_table(stats: Dict[str, Dict[str, Dict[str, float]]]) -> None:
         for c in cols:
             m = stats[layout_key][c]["mean"]
             se = stats[layout_key][c]["se"]
-            entries.append(f"{m:.2f} ± {se:.2f}")
+            entries.append(f"{m:.2f} ± {se:.2f}" if seed_agg == "mean" else f"{m:.2f}")
         print(
             f"{layout_label:<24} | {entries[0]:>14} | {entries[1]:>14} | "
             f"{entries[2]:>16} | {entries[3]:>14}"
@@ -160,7 +194,6 @@ def plot_figure_4a(
             zorder=4,
         )
 
-    # Optional gold standard per layout: draw horizontal line over each bar cluster.
     for center, layout in zip(centers, LAYOUT_ORDER):
         gs = stats[layout].get("gold_standard")
         if gs is None:
@@ -202,7 +235,6 @@ def plot_figure_4a(
 
 
 def load_results(path: Path) -> Dict[str, Dict[str, Any]]:
-    """Load results dict from JSON or pickle."""
     suffix = path.suffix.lower()
     if suffix == ".json":
         with path.open("r", encoding="utf-8") as f:
@@ -214,7 +246,6 @@ def load_results(path: Path) -> Dict[str, Dict[str, Any]]:
 
 
 def make_example_results() -> Dict[str, Dict[str, Any]]:
-    """Small synthetic example for smoke testing plot generation."""
     rng = np.random.RandomState(0)
     out: Dict[str, Dict[str, Any]] = {}
     for layout in LAYOUT_ORDER:
@@ -240,6 +271,13 @@ def main() -> None:
         default="figure_4a.png",
         help="Output image path (default: figure_4a.png).",
     )
+    parser.add_argument(
+        "--seed_agg",
+        type=str,
+        default="mean",
+        choices=["mean", "best"],
+        help="Aggregate across seeds as mean+SE (default) or best-seed (max).",
+    )
     args = parser.parse_args()
 
     if args.results_path is None:
@@ -248,8 +286,8 @@ def main() -> None:
     else:
         results = load_results(Path(args.results_path))
 
-    stats = compute_stats(results)
-    print_summary_table(stats)
+    stats = compute_stats(results, seed_agg=args.seed_agg, num_seeds=5)
+    print_summary_table(stats, seed_agg=args.seed_agg)
     plot_figure_4a(stats, Path(args.output))
     print(f"\nSaved figure to: {args.output}")
 
