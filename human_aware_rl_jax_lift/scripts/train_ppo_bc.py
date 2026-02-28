@@ -7,7 +7,7 @@ from human_aware_rl_jax_lift.agents.ppo.config import PPOConfig
 from human_aware_rl_jax_lift.reproducibility.paper_hparams import get_hparams
 from human_aware_rl_jax_lift.training.checkpoints import load_best_bc_model_paths
 from human_aware_rl_jax_lift.training.ppo_run import ppo_run
-from human_aware_rl_jax_lift.training.ppo_run_jax import ppo_run_jax
+from human_aware_rl_jax_lift.training.ppo_run import ppo_run_jax
 
 BC_TOTAL_TIMESTEPS = {
     "simple": int(8e6),
@@ -30,7 +30,7 @@ def main() -> None:
     parser.add_argument(
         "--jax",
         action="store_true",
-        help="Use fully-JAX rollout (vec_env_jax + runner_jax) for GPU; no legacy Python step loop.",
+        help="Use fully-JAX rollout (vec_env + runner) for GPU; no legacy Python step loop.",
     )
     args = parser.parse_args()
 

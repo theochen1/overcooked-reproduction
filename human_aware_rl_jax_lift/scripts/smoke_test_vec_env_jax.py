@@ -9,7 +9,7 @@ Expected:
 """
 import jax
 from human_aware_rl_jax_lift.env.layouts import parse_layout
-from human_aware_rl_jax_lift.training.vec_env_jax import (
+from human_aware_rl_jax_lift.training.vec_env import (
     batched_step,
     encode_obs,
     make_batched_state,

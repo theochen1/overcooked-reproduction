@@ -46,7 +46,7 @@ from human_aware_rl_jax_lift.agents.bc.model import BCPolicy
 
 # JAX env/rollout utilities
 from human_aware_rl_jax_lift.env.layouts import parse_layout
-from human_aware_rl_jax_lift.training.vec_env_jax import make_batched_state, encode_obs, batched_step
+from human_aware_rl_jax_lift.training.vec_env import make_batched_state, encode_obs, batched_step
 from human_aware_rl_jax_lift.encoding.bc_features import featurize_state_64
 
 

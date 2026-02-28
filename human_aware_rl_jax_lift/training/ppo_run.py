@@ -9,7 +9,7 @@ Key points
 - Rollout is a single `jax.lax.scan` call — no Python step loop.
 - Supports self-play (other_agent_type='sp') and BC partners (other_agent_type
   in {'bc_train','bc_test'}) inside the scanned rollout.
-- Implements TF/legacy mixing semantics via runner_jax.make_rollout_fn:
+- Implements TF/legacy mixing semantics via runner.make_rollout_fn:
   self-play vs BC mixing is environment-level, and can be trajectory-level
   (sample once per env per episode) when config.trajectory_self_play is True.
 """
@@ -34,8 +34,8 @@ from human_aware_rl_jax_lift.env.reward_shaping import annealed_shaping_factor
 from human_aware_rl_jax_lift.reproducibility.seed import set_global_seed
 
 from .checkpoints import save_ppo_checkpoint, save_training_info
-from .runner_jax import make_rollout_fn
-from .vec_env_jax import encode_obs, make_batched_state
+from .runner import make_rollout_fn
+from .vec_env import encode_obs, make_batched_state
 
 
 def _log_table(kvs: Dict[str, object]) -> None:
@@ -401,3 +401,7 @@ def ppo_run(
         })
 
     return summaries
+
+
+# Alias for scripts that import the JAX path by name (this module is the JAX implementation).
+ppo_run_jax = ppo_run

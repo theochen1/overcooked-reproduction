@@ -19,7 +19,7 @@ from human_aware_rl_jax_lift.env.overcooked_mdp import step as jax_step
 from human_aware_rl_jax_lift.env.state import make_initial_state
 from human_aware_rl_jax_lift.encoding.ppo_masks import lossless_state_encoding_20
 from human_aware_rl_jax_lift.agents.ppo.train import compute_gae
-from human_aware_rl_jax_lift.training.vec_env_jax import batched_step, encode_obs, make_batched_state
+from human_aware_rl_jax_lift.training.vec_env import batched_step, encode_obs, make_batched_state
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +217,7 @@ def test_obs_encoding_parity(layout):
 
 @pytest.mark.parametrize("layout", LAYOUTS)
 def test_multi_episode_reset_parity(layout):
-    """Run 3 episodes and validate reset-boundary parity with vec_env_jax.
+    """Run 3 episodes and validate reset-boundary parity with vec_env.
 
     This directly checks whether JAX reset behavior matches legacy semantics:
     the step that reaches horizon emits done=1 and returns the *reset* state/obs.
@@ -271,7 +271,7 @@ def test_multi_episode_reset_parity(layout):
         )
 
         if done:
-            # On boundary step, vec_env_jax should emit already-reset state.
+            # On boundary step, vec_env should emit already-reset state.
             reset_legacy = mdp.get_standard_start_state()
             reset_legacy_as_jax = from_legacy_state(terrain, reset_legacy)
             _assert_state_equal(get_state0(bstate.states), reset_legacy_as_jax, step_idx=t)
@@ -546,7 +546,7 @@ def test_reward_pipeline_rollout_and_gae_parity():
     assert np.allclose(sparse_j, sparse_l), "Per-step sparse reward stream mismatch"
     assert np.allclose(dones_j, dones_l), "Done mask mismatch"
 
-    # Episode stats parity (same semantics as runner_jax aggregate logic).
+    # Episode stats parity (same semantics as runner aggregate logic).
     assert sum(dones_j) == 1.0, "Expected exactly one completed episode in horizon rollout"
     ep_total_j = float(sum(rewards_j))
     ep_total_l = float(sum(rewards_l))

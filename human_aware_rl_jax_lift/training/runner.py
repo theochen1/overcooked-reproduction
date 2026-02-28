@@ -27,7 +27,7 @@ from human_aware_rl_jax_lift.agents.bc.model import BCPolicy
 from human_aware_rl_jax_lift.encoding.bc_features import featurize_state_64
 from human_aware_rl_jax_lift.env.state import Terrain
 
-from .vec_env_jax import BatchedEnvState, batched_step, encode_obs
+from .vec_env import BatchedEnvState, batched_step, encode_obs
 
 
 # ---------------------------------------------------------------------------

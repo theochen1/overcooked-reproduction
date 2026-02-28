@@ -16,7 +16,7 @@ from human_aware_rl_jax_lift.reproducibility.paper_hparams import get_hparams
 # Keys that PPOConfig accepts; we only pass these from overrides so YAML can drive all of them.
 _PPO_CONFIG_KEYS = {f.name for f in fields(PPOConfig)}
 from human_aware_rl_jax_lift.training.ppo_run import ppo_run
-from human_aware_rl_jax_lift.training.ppo_run_jax import ppo_run_jax
+from human_aware_rl_jax_lift.training.ppo_run import ppo_run_jax
 
 
 def main() -> None:

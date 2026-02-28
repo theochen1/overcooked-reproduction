@@ -1,7 +1,7 @@
 """Population-based training loop using JAX rollout primitives.
 
 This module is intended to be *native JAX* in the same sense as ppo_run.py:
-- rollout is on-device via runner_jax (lax.scan)
+- rollout is on-device via runner (lax.scan)
 - minibatch shuffling uses jax.random.permutation (not numpy)
 
 High-level PBT orchestration (selection windows, exploit/explore) remains in
@@ -29,8 +29,8 @@ from human_aware_rl_jax_lift.reproducibility.seed import set_global_seed
 
 from .checkpoints import save_ppo_checkpoint, save_training_info
 from .ppo_run import compute_self_play_factor
-from .runner_jax import make_rollout_fn
-from .vec_env_jax import encode_obs, make_batched_state
+from .runner import make_rollout_fn
+from .vec_env import encode_obs, make_batched_state
 
 
 def _flatten(x: jnp.ndarray) -> jnp.ndarray:
