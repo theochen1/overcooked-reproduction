@@ -1,6 +1,11 @@
 """Population-based training loop using JAX rollout primitives.
 
-Ported to use runner_jax instead of legacy VectorizedEnv/RolloutRunner/partners.
+This module is intended to be *native JAX* in the same sense as ppo_run.py:
+- rollout is on-device via runner_jax (lax.scan)
+- minibatch shuffling uses jax.random.permutation (not numpy)
+
+High-level PBT orchestration (selection windows, exploit/explore) remains in
+Python, but the per-update PPO training path avoids numpy-based randomness.
 """
 
 import copy
@@ -111,14 +116,16 @@ def pbt_run(
     """Run population-based training and return aggregate metrics."""
     if len(seeds) < pbt_config.population_size:
         raise ValueError("Need at least one seed per population member")
+
     terrain = parse_layout(layout_name)
+
     # Paper Appendix D: PBT uses 50 parallel environments.
     ppo_config = replace(ppo_config, num_envs=50)
+
     run_name = ex_name or f"pbt_{layout_name}"
     batch_size = int(ppo_config.num_envs * ppo_config.horizon)
     updates_total = int(total_steps_per_agent // batch_size)
 
-    # Load BC params if needed
     bc_params = None
     if other_agent_type in ("bc_train", "bc_test"):
         if best_bc_model_paths is None:
@@ -138,24 +145,20 @@ def pbt_run(
         seed = int(seeds[m_idx])
         rng = set_global_seed(seed)
 
-        # Probe obs shape
         rng, probe_rng = jax.random.split(rng)
         probe_bstate = make_batched_state(terrain, 1, probe_rng)
         probe_obs0, _ = encode_obs(terrain, probe_bstate)
         obs_shape = probe_obs0.shape[1:]
 
-        # Create train state with mutated hyperparams
         cfg = _cfg_from_member_params(ppo_config, trainer.population[m_idx].params)
         state = create_train_state(rng, obs_shape, cfg)
 
-        # Create batched env state
         rng, env_rng = jax.random.split(rng)
         bstate = make_batched_state(
             terrain, cfg.num_envs, env_rng, randomize_agent_idx=cfg.randomize_agent_idx
         )
         obs0, _ = encode_obs(terrain, bstate)
 
-        # Build rollout fn
         rollout_fn = make_rollout_fn(
             terrain=terrain,
             horizon=cfg.horizon,
@@ -222,11 +225,12 @@ def pbt_run(
                 adv_flat = _flatten(jnp.asarray(adv))
                 ret_flat = _flatten(jnp.asarray(ret))
 
-                minibatch_size = (member.cfg.num_envs * member.cfg.horizon) // member.cfg.num_minibatches
-                epoch_losses = []
+                minibatch_size = int((member.cfg.num_envs * member.cfg.horizon) // member.cfg.num_minibatches)
+                epoch_losses: List[jax.Array] = []
                 for _ in range(member.cfg.num_epochs):
-                    perm = np.random.permutation(member.cfg.num_envs * member.cfg.horizon)
-                    for start in range(0, len(perm), minibatch_size):
+                    rng, perm_rng = jax.random.split(rng)
+                    perm = jax.random.permutation(perm_rng, obs_flat.shape[0])
+                    for start in range(0, int(perm.shape[0]), minibatch_size):
                         idx = perm[start : start + minibatch_size]
                         member.train_state, metrics = ppo_update_step(
                             member.train_state,
@@ -238,13 +242,13 @@ def pbt_run(
                             returns=ret_flat[idx],
                             config=member.cfg,
                         )
-                        epoch_losses.append(float(metrics["loss"]))
+                        epoch_losses.append(metrics["loss"])
 
-                member.logs["loss"].append(float(np.mean(epoch_losses)) if epoch_losses else 0.0)
+                loss_mean = float(jnp.mean(jnp.stack(epoch_losses))) if epoch_losses else 0.0
+                member.logs["loss"].append(loss_mean)
                 member.logs["eprewmean"].append(float(rollout.infos["eprewmean"]))
                 member.logs["ep_sparse_rew_mean"].append(float(rollout.infos["ep_sparse_rew_mean"]))
 
-        # Selection fitness from explicit evaluation episodes
         fitnesses = [_evaluate_member(member, pbt_config.num_selection_games, terrain) for member in members]
 
         trainer.update_fitness(fitnesses)
@@ -252,13 +256,12 @@ def pbt_run(
         updates_done += updates_this_selection
         selection_history.append({"fitnesses": list(map(float, fitnesses))})
 
-        # Copy network weights best -> replaced members
         for replaced_idx, src_idx in copy_map.items():
+            # JAX params are immutable; sharing the pytree is safe here.
             members[replaced_idx].train_state = members[replaced_idx].train_state.replace(
-                params=copy.deepcopy(members[src_idx].train_state.params)
+                params=members[src_idx].train_state.params
             )
 
-        # Apply mutated hyperparams for next selection window
         for midx, member in enumerate(members):
             old_lr = member.cfg.learning_rate
             member.cfg = _cfg_from_member_params(ppo_config, trainer.population[midx].params)
@@ -269,7 +272,6 @@ def pbt_run(
                     max_grad_norm=member.cfg.max_grad_norm,
                 )
 
-    # Persist per-member artifacts in ppo-compatible format
     root = Path(save_dir) / run_name
     root.mkdir(parents=True, exist_ok=True)
     for midx, member in enumerate(members):
