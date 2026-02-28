@@ -401,7 +401,3 @@ def ppo_run(
         })
 
     return summaries
-
-
-# Alias for scripts that import the JAX path by name (this module is the JAX implementation).
-ppo_run_jax = ppo_run
