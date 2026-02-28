@@ -36,8 +36,8 @@ This table maps common legacy training-stack concepts to their JAX-native locati
 | Partner policy (self-play) | Partner action distribution from same policy | `human_aware_rl_jax_lift.training.runner` | Partner samples via `jax.random.categorical` from the same policy network |
 | Partner policy (BC) | Partner action distribution from BC logits; optional “unstuck” rule | `human_aware_rl_jax_lift.training.runner` | BC logits from `BCPolicy().apply(...)`, then `_unstuck_adjust_probs(...)`, then sampling |
 | SP-vs-BC mixing | Mix self-play and BC partner based on a scalar probability | `human_aware_rl_jax_lift.training.runner` | Controlled by `sp_factor`; trajectory-level if `trajectory_sp=True` (sample at episode reset and hold) |
-| PPO driver | Rollout → GAE → minibatch PPO updates → checkpoint/logging | `human_aware_rl_jax_lift.training.ppo_run` | `ppo_run(...)`, `_run_update_epochs(...)`, `compute_gae(...)`, `ppo_update_step(...)` |
-| Reward shaping schedule | Anneal shaped reward contribution over training | `human_aware_rl_jax_lift.training.ppo_run` | `annealed_shaping_factor(...)` updates `shaping_factor` |
+| PPO driver | Rollout → GAE → minibatch PPO updates → checkpoint/logging | `human_aware_rl_jax_lift.training.ppo_run` | `ppo_run(...)`, `_run_update_epochs(...)`, and the call sites for `agents.ppo.train.compute_gae(...)` and `agents.ppo.train.ppo_update_step(...)` |
+| Reward shaping schedule | Anneal shaped reward contribution over training | Used in `human_aware_rl_jax_lift.training.ppo_run`; implemented in `human_aware_rl_jax_lift.env.reward_shaping` | In PPO, inspect the `annealed_shaping_factor(...)` call site that updates `shaping_factor` |
 | Training reward metrics | Compute smoothed `eprewmean` and sparse `true_eprew` | `runner` + `ppo_run` | Runner returns `completed_eprew` and `completed_ep_sparse_rew` in rollout infos; PPO buffers them (deque) and logs |
 | PBT orchestration | Population, selection windows, exploit/explore, weight copying, hparam mutation | `human_aware_rl_jax_lift.training.pbt_run` | `PBTTrainer`, `_evaluate_member(...)`, and member loops |
 | PBT “native JAX” minibatching | Avoid NumPy randomness in minibatch shuffling | `human_aware_rl_jax_lift.training.pbt_run` | Minibatch shuffle uses `jax.random.permutation` with PRNG threading |
@@ -56,8 +56,8 @@ This section mirrors the mental model of the TF training loop but points to the 
 4. **GAE/returns**: `compute_gae(rewards, values, dones, ...)` produces advantages and returns.
 5. **Update**: PPO flattens `[T,N,...]` into `[T*N,...]` and runs multiple epochs/minibatches through `ppo_update_step(...)`.
 6. **Logging**:
-   - `eprewmean` comes from accumulated `rollout.rewards` episode returns.
-   - `true_eprew` in the printed table is the *sparse* episode return mean (`ep_sparse_rew_mean`).
+   - The rollout provides arrays of completed-episode returns in `rollout.infos` (`completed_eprew` and `completed_ep_sparse_rew`).
+   - PPO computes `eprewmean` and the printed `true_eprew` as rolling means over the last 100 completed episodes (or falls back to scalar means in `rollout.infos` if the buffers are empty).
 
 Interpretability note: the metric computation is deterministic given a rollout, but rollouts are stochastic because actions are sampled (`jax.random.categorical`) for both the agent and the partner.
 
@@ -87,12 +87,12 @@ These mechanics are centralized in `human_aware_rl_jax_lift.training.runner`.
 
 The training directory is natively JAX:
 
-- PPO training: `human_aware_rl_jax_lift/training/ppo_run.py` (also exported as `ppo_run_jax` for scripts that pass `--jax`)
-- Vectorized env (functional): `human_aware_rl_jax_lift/training/vec_env.py` — `make_batched_state`, `batched_step`, `encode_obs`, `BatchedEnvState`
-- Rollout/partner logic: `human_aware_rl_jax_lift/training/runner.py` — `make_rollout_fn`, scan-based rollout
-- PBT training: `human_aware_rl_jax_lift/training/pbt_run.py`
+- PPO training: `human_aware_rl_jax_lift/training/ppo_run.py`.
+- Vectorized env (functional): `human_aware_rl_jax_lift/training/vec_env.py` — `make_batched_state`, `batched_step`, `encode_obs`, `BatchedEnvState`.
+- Rollout/partner logic: `human_aware_rl_jax_lift/training/runner.py` — `make_rollout_fn`, scan-based rollout.
+- PBT training: `human_aware_rl_jax_lift/training/pbt_run.py`.
 
-There is no separate file `training/ppo_run_jax.py`; the JAX implementation lives in `ppo_run.py`. The former stateful `env/vec_env.py` (VectorizedEnv) was removed; the only vectorized env is the functional API in `training/vec_env.py`.
+There is no separate file `training/ppo_run_jax.py`; the JAX implementation lives in `ppo_run.py`.
 
 ---
 
