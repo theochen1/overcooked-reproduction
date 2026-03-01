@@ -1,4 +1,4 @@
-"""Decisive parity tests: JAX-lift vs legacy TF dynamics.
+"""Decisive parity tests: this repo's dynamics vs legacy TF dynamics.
 
 Three tests that isolate whether the true_eprew divergence is
 (a) a real env/reward bug, or (b) just RNG stream differences.

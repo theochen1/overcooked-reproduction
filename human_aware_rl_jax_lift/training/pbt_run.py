@@ -1,11 +1,8 @@
-"""Population-based training loop using JAX rollout primitives.
+"""Population-based training loop.
 
-This module is intended to be *native JAX* in the same sense as ppo_run.py:
-- rollout is on-device via runner (lax.scan)
-- minibatch shuffling uses jax.random.permutation (not numpy)
-
-High-level PBT orchestration (selection windows, exploit/explore) remains in
-Python, but the per-update PPO training path avoids numpy-based randomness.
+Uses the same on-device rollout as ppo_run (runner + lax.scan) and
+minibatch shuffling via jax.random.permutation. High-level PBT orchestration
+(selection windows, exploit/explore) runs in Python.
 """
 
 import copy

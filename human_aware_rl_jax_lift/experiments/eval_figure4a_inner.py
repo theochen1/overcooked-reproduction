@@ -47,8 +47,15 @@ from human_aware_rl_jax_lift.agents.bc.model import BCPolicy
 # JAX env/rollout utilities
 from human_aware_rl_jax_lift.env.layouts import parse_layout
 from human_aware_rl_jax_lift.training.vec_env import make_batched_state, encode_obs, batched_step
+from human_aware_rl_jax_lift.training.runner import (
+    _init_bc_partner_state,
+    _push_history,
+    _unstuck_adjust_probs,
+)
 from human_aware_rl_jax_lift.encoding.bc_features import featurize_state_64
 
+# Paper BC unstuck rule (same as PPO-BC training)
+BC_STUCK_TIME = 3
 
 HORIZON = 400
 
@@ -78,6 +85,32 @@ def _load_bc_params(best_paths: dict, layout: str, split: str) -> dict:
     bc_dir = bc_dir if bc_dir.is_dir() else bc_dir.parent
     params, _meta = load_bc_checkpoint(bc_dir)
     return params
+
+
+def _ppo_cnn_flatten_size(terrain) -> int:
+    """Expected Dense_0 input size for ActorCriticCNN: (H-2)*(W-2)*25 from grid (H, W)."""
+    h, w = terrain.grid.shape
+    return (h - 2) * (w - 2) * 25
+
+
+def _check_ppo_params_for_terrain(terrain, params: dict, run_name: str = "") -> None:
+    """Raise if loaded PPO params were trained with a different layout (CNN input shape mismatch)."""
+    expected = _ppo_cnn_flatten_size(terrain)
+    try:
+        kernel = params["Dense_0"]["kernel"]
+        actual = int(kernel.shape[0])
+    except (KeyError, TypeError) as e:
+        raise ValueError(
+            f"PPO params have unexpected structure (missing Dense_0/kernel). "
+            f"Run={run_name}. Error: {e}"
+        ) from e
+    if actual != expected:
+        raise ValueError(
+            f"PPO checkpoint was trained with a different layout: "
+            f"Dense_0 input size is {actual} but current layout needs {expected}. "
+            f"Run={run_name}. Ensure OVERCOOKED_LAYOUT_DIR is the same as during training "
+            f"and that you are loading the run for this layout."
+        )
 
 
 def _load_ppo_params(ppo_runs_dir: Path, run_name: str, seed: int) -> dict:
@@ -117,47 +150,93 @@ def _eval_pair(
     num_games: int,
     rng_key: jax.Array,
 ) -> float:
-    """Evaluate mean cumulative sparse reward over HORIZON steps."""
+    """Evaluate mean cumulative sparse reward over HORIZON steps.
+
+    BC/HProxy use the paper's unstuck rule (same as PPO-BC training): when the
+    agent has been stuck in the same position for BC_STUCK_TIME+1 steps, mask
+    recently-taken actions and renormalize before sampling.
+    """
 
     rng_key, reset_rng = jax.random.split(rng_key)
     bstate = make_batched_state(terrain, num_games, reset_rng, randomize_agent_idx=False)
     obs0, obs1 = encode_obs(terrain, bstate)
 
+    # BC unstuck state (position/action history) for each player when they are BC
+    ph0, ah0, hl0, _ = _init_bc_partner_state(num_games)
+    ph1, ah1, hl1, _ = _init_bc_partner_state(num_games)
+
     shaping = jnp.array(0.0, dtype=jnp.float32)
 
     def step_fn(carry, _t):
-        bstate, obs0, obs1, rng = carry
+        (bstate, obs0, obs1, rng, pos_hist0, act_hist0, hist_len0, pos_hist1, act_hist1, hist_len1) = carry
         rng, k0, k1, kresets = jax.random.split(rng, 4)
         reset_keys = jax.random.split(kresets, num_games)
 
+        # Reset BC history at episode boundaries (match training runner)
+        reset_ep = (bstate.states.timestep == 0)
+        zeros_pos = jnp.zeros_like(pos_hist0)
+        zeros_act = jnp.zeros_like(act_hist0)
+        pos_hist0 = jnp.where(reset_ep[:, None, None], zeros_pos, pos_hist0)
+        act_hist0 = jnp.where(reset_ep[:, None], zeros_act, act_hist0)
+        hist_len0 = jnp.where(reset_ep, jnp.zeros_like(hist_len0), hist_len0)
+        pos_hist1 = jnp.where(reset_ep[:, None, None], zeros_pos, pos_hist1)
+        act_hist1 = jnp.where(reset_ep[:, None], zeros_act, act_hist1)
+        hist_len1 = jnp.where(reset_ep, jnp.zeros_like(hist_len1), hist_len1)
+
+        # Agent 0
         if a0_kind == "ppo":
             logits0 = _ppo_logits(a0_params, obs0)
+            act0 = jax.random.categorical(k0, logits0)
         else:
             logits0 = _bc_logits(a0_params, terrain, bstate.states, which_player=0)
+            probs0 = jax.nn.softmax(logits0, axis=-1)
+            probs0 = _unstuck_adjust_probs(
+                probs0, pos_hist0, act_hist0, hist_len0, stuck_time=BC_STUCK_TIME
+            )
+            act0 = jax.random.categorical(k0, probs0)
+            pos_xy0 = bstate.states.player_pos[:, 0, :]
+            pos_hist0, act_hist0, hist_len0 = _push_history(
+                pos_hist0, act_hist0, hist_len0,
+                pos_xy=pos_xy0, act=act0, update_mask=jnp.ones(num_games, dtype=jnp.bool_),
+            )
 
+        # Agent 1
         if a1_kind == "ppo":
             logits1 = _ppo_logits(a1_params, obs1)
+            act1 = jax.random.categorical(k1, logits1)
         else:
             logits1 = _bc_logits(a1_params, terrain, bstate.states, which_player=1)
+            probs1 = jax.nn.softmax(logits1, axis=-1)
+            probs1 = _unstuck_adjust_probs(
+                probs1, pos_hist1, act_hist1, hist_len1, stuck_time=BC_STUCK_TIME
+            )
+            act1 = jax.random.categorical(k1, probs1)
+            pos_xy1 = bstate.states.player_pos[:, 1, :]
+            pos_hist1, act_hist1, hist_len1 = _push_history(
+                pos_hist1, act_hist1, hist_len1,
+                pos_xy=pos_xy1, act=act1, update_mask=jnp.ones(num_games, dtype=jnp.bool_),
+            )
 
-        act0 = jax.random.categorical(k0, logits0)
-        act1 = jax.random.categorical(k1, logits1)
+        act0 = act0.astype(jnp.int32)
+        act1 = act1.astype(jnp.int32)
 
         bstate, obs0, obs1, _rewards, _dones, sparse_r = batched_step(
             terrain,
             bstate,
-            act0.astype(jnp.int32),
-            act1.astype(jnp.int32),
+            act0,
+            act1,
             reset_keys,
             shaping,
             HORIZON,
             player_order_actions=True,
             randomize_agent_idx=False,
         )
-        return (bstate, obs0, obs1, rng), sparse_r
+        new_carry = (bstate, obs0, obs1, rng, pos_hist0, act_hist0, hist_len0, pos_hist1, act_hist1, hist_len1)
+        return new_carry, sparse_r
 
-    (_bstate, _obs0, _obs1, _rng), sparse_traj = jax.lax.scan(
-        step_fn, (bstate, obs0, obs1, rng_key), xs=None, length=HORIZON
+    init_carry = (bstate, obs0, obs1, rng_key, ph0, ah0, hl0, ph1, ah1, hl1)
+    (_bstate, _obs0, _obs1, _rng, _ph0, _ah0, _hl0, _ph1, _ah1, _hl1), sparse_traj = jax.lax.scan(
+        step_fn, init_carry, xs=None, length=HORIZON
     )
 
     returns = jnp.sum(sparse_traj, axis=0)
@@ -200,18 +279,18 @@ def main() -> None:
     }
 
     sp_run_candidates = _try_run_names([
-        "ppo_sp_jax_{layout}",
         "ppo_sp_{layout}",
+        "ppo_sp_jax_{layout}",
     ], layout)
 
     bc_train_run_candidates = _try_run_names([
-        "ppo_bc_train_jax_{layout}",
         "ppo_bc_train_{layout}",
+        "ppo_bc_train_jax_{layout}",
     ], layout)
 
     bc_test_run_candidates = _try_run_names([
-        "ppo_bc_test_jax_{layout}",
         "ppo_bc_test_{layout}",
+        "ppo_bc_test_jax_{layout}",
     ], layout)
 
     def load_first_existing(run_names: List[str], seed: int) -> Tuple[str, dict]:
@@ -227,6 +306,7 @@ def main() -> None:
     # PPO-SP
     for i, seed in enumerate(PPO_SP_SEEDS):
         rn, params = load_first_existing(sp_run_candidates, seed)
+        _check_ppo_params_for_terrain(terrain, params, run_name=rn)
         rng = jax.random.PRNGKey(int(seed))
         out["SP_SP"][i] = _eval_pair(terrain, "ppo", params, "ppo", params, num_games=args.num_games, rng_key=rng)
         out["SP_HProxy"][i] = _eval_pair(terrain, "ppo", params, "bc", hproxy, num_games=args.num_games, rng_key=rng)
@@ -236,6 +316,7 @@ def main() -> None:
     # PPO-BC-train (trained with BC_train; evaluated w/ HProxy)
     for i, seed in enumerate(PPO_BC_TRAIN_SEEDS):
         rn, params = load_first_existing(bc_train_run_candidates, seed)
+        _check_ppo_params_for_terrain(terrain, params, run_name=rn)
         rng = jax.random.PRNGKey(int(seed))
         out["PPOBC_HProxy"][i] = _eval_pair(terrain, "ppo", params, "bc", hproxy, num_games=args.num_games, rng_key=rng)
         out["PPOBC_HProxy_sw"][i] = _eval_pair(terrain, "bc", hproxy, "ppo", params, num_games=args.num_games, rng_key=rng)
@@ -253,6 +334,7 @@ def main() -> None:
     gold_vals: List[float] = []
     for seed in PPO_BC_TEST_SEEDS:
         rn, params = load_first_existing(bc_test_run_candidates, seed)
+        _check_ppo_params_for_terrain(terrain, params, run_name=rn)
         rng = jax.random.PRNGKey(int(seed))
         v0 = _eval_pair(terrain, "ppo", params, "bc", hproxy, num_games=args.num_games, rng_key=rng)
         v1 = _eval_pair(terrain, "bc", hproxy, "ppo", params, num_games=args.num_games, rng_key=rng)

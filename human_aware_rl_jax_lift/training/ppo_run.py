@@ -1,16 +1,13 @@
-"""PPO training loop using the fully-JAX runner (vmap + lax.scan).
+"""PPO training loop with on-device rollout (vmap + lax.scan).
 
-This repository is a JAX lift: PPO rollouts and training should default to the
-fully on-device implementation. This module therefore provides the *default*
-`ppo_run(...)` entrypoint used by scripts and SLURM jobs.
+Provides the default `ppo_run(...)` entrypoint used by scripts and SLURM jobs.
 
 Key points
 ----------
-- Rollout is a single `jax.lax.scan` call — no Python step loop.
+- Rollout is a single lax.scan call — no Python step loop.
 - Supports self-play (other_agent_type='sp') and BC partners (other_agent_type
   in {'bc_train','bc_test'}) inside the scanned rollout.
-- Implements TF/legacy mixing semantics via runner.make_rollout_fn:
-  self-play vs BC mixing is environment-level, and can be trajectory-level
+- Self-play vs BC mixing is environment-level, and can be trajectory-level
   (sample once per env per episode) when config.trajectory_self_play is True.
 """
 
@@ -187,7 +184,7 @@ def ppo_run(
     print(f"[{_ts(t0)}] Layout parsed.")
     sys.stdout.flush()
 
-    run_name = ex_name or f"ppo_{other_agent_type}_jax_{layout_name}"
+    run_name = ex_name or f"ppo_{other_agent_type}_{layout_name}"
     root_dir = Path(save_dir) / run_name
     root_dir.mkdir(parents=True, exist_ok=True)
     with (root_dir / "config.pkl").open("wb") as f:

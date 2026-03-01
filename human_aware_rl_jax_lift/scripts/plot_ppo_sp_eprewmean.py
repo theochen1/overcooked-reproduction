@@ -27,7 +27,7 @@ def main() -> None:
         "--save_dir",
         type=Path,
         default=Path("data/ppo_runs"),
-        help="Root dir containing ppo_sp_jax_<layout>/seed<N>/training_info.pkl",
+        help="Root dir containing ppo_sp_<layout>/seed<N>/training_info.pkl",
     )
     parser.add_argument("--output", type=Path, default=Path("data/ppo_sp_true_eprew_by_layout.png"))
     parser.add_argument("--title", type=str, default="PPO SP: mean true_eprew across seeds")
@@ -36,7 +36,9 @@ def main() -> None:
     layout_curves = {}  # layout -> dict with "steps", "mean", "std", "n_seeds"
 
     for layout in LAYOUTS:
-        run_dir = args.save_dir / f"ppo_sp_jax_{layout}"
+        run_dir = args.save_dir / f"ppo_sp_{layout}"
+        if not run_dir.exists():
+            run_dir = args.save_dir / f"ppo_sp_jax_{layout}"  # backward compat
         if not run_dir.exists():
             print(f"Skip {layout}: missing {run_dir}")
             continue

@@ -7,7 +7,6 @@ from human_aware_rl_jax_lift.agents.ppo.config import PPOConfig
 from human_aware_rl_jax_lift.reproducibility.paper_hparams import get_hparams
 from human_aware_rl_jax_lift.training.checkpoints import load_best_bc_model_paths
 from human_aware_rl_jax_lift.training.ppo_run import ppo_run
-from human_aware_rl_jax_lift.training.ppo_run import ppo_run_jax
 
 BC_TOTAL_TIMESTEPS = {
     "simple": int(8e6),
@@ -27,11 +26,6 @@ def main() -> None:
     parser.add_argument("--bc_paths_file", type=str, default="data/bc_runs/best_bc_model_paths.pkl")
     parser.add_argument("--total_timesteps", type=int, default=None)
     parser.add_argument("--self_play_horizon", type=int, nargs=2, default=None)
-    parser.add_argument(
-        "--jax",
-        action="store_true",
-        help="Use fully-JAX rollout (vec_env + runner) for GPU; no legacy Python step loop.",
-    )
     args = parser.parse_args()
 
     bc_paths = load_best_bc_model_paths(Path(args.bc_paths_file))
@@ -57,27 +51,15 @@ def main() -> None:
         max_grad_norm=float(overrides.get("max_grad_norm", 0.1)),
     )
     run_name = f"ppo_bc_{args.bc_split}_{args.layout}"
-    if args.jax:
-        run_name = f"ppo_bc_{args.bc_split}_jax_{args.layout}"
-        summaries = ppo_run_jax(
-            layout_name=args.layout,
-            seeds=list(args.seeds),
-            config=cfg,
-            other_agent_type=other_agent_type,
-            save_dir=args.save_dir,
-            ex_name=run_name,
-            best_bc_model_paths=bc_paths,
-        )
-    else:
-        summaries = ppo_run(
-            layout_name=args.layout,
-            seeds=list(args.seeds),
-            config=cfg,
-            other_agent_type=other_agent_type,
-            save_dir=args.save_dir,
-            ex_name=run_name,
-            best_bc_model_paths=bc_paths,
-        )
+    summaries = ppo_run(
+        layout_name=args.layout,
+        seeds=list(args.seeds),
+        config=cfg,
+        other_agent_type=other_agent_type,
+        save_dir=args.save_dir,
+        ex_name=run_name,
+        best_bc_model_paths=bc_paths,
+    )
     print({"run_name": run_name, "num_seeds": len(summaries), "summaries": summaries})
 
 

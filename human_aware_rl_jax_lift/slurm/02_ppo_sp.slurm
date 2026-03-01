@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=oc_ppo_sp_jax
+#SBATCH --job-name=oc_ppo_sp
 #SBATCH --account=mit_general
 #SBATCH --qos=normal
 #SBATCH --partition=mit_normal_gpu
@@ -33,20 +33,20 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
 
-# JAX persistent compilation cache — avoids recompiling kernels on every job.
+# Persistent compilation cache — avoids recompiling kernels on every job.
 # After the first run, subsequent jobs on the same GPU model skip the XLA compile.
 export JAX_COMPILATION_CACHE_DIR="/home/tchen22/.cache/jax_compile_cache"
 mkdir -p "$JAX_COMPILATION_CACHE_DIR"
 
 echo "GPU: $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | head -1)"
 
-# Fail fast if JAX cannot see the GPU
+# Fail fast if GPU not visible
 python -c "
 import jax
 devs = jax.devices()
-print('JAX devices:', devs)
+print('Devices:', devs)
 assert any('gpu' in str(d).lower() or 'cuda' in str(d).lower() for d in devs), \
-    f'No GPU found by JAX — check jax[cuda12] install. Devices: {devs}'
+    f'No GPU found — check CUDA/backend install. Devices: {devs}'
 print('GPU check passed.')
 " || exit 1
 
@@ -56,7 +56,6 @@ cd "$SLURM_SUBMIT_DIR/.."
 python -u scripts/train_ppo_sp.py \
     --layout   "$LAYOUT" \
     --seeds    "${PPO_SP_SEEDS[@]}" \
-    --save_dir data/ppo_runs \
-    --jax
+    --save_dir data/ppo_runs
 
 echo "Done: $(date)"

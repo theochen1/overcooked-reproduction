@@ -40,7 +40,7 @@ This table maps common legacy training-stack concepts to their JAX-native locati
 | Reward shaping schedule | Anneal shaped reward contribution over training | Used in `human_aware_rl_jax_lift.training.ppo_run`; implemented in `human_aware_rl_jax_lift.env.reward_shaping` | In PPO, inspect the `annealed_shaping_factor(...)` call site that updates `shaping_factor` |
 | Training reward metrics | Compute smoothed `eprewmean` and sparse `true_eprew` | `runner` + `ppo_run` | Runner returns `completed_eprew` and `completed_ep_sparse_rew` in rollout infos; PPO buffers them (deque) and logs |
 | PBT orchestration | Population, selection windows, exploit/explore, weight copying, hparam mutation | `human_aware_rl_jax_lift.training.pbt_run` | `PBTTrainer`, `_evaluate_member(...)`, and member loops |
-| PBT “native JAX” minibatching | Avoid NumPy randomness in minibatch shuffling | `human_aware_rl_jax_lift.training.pbt_run` | Minibatch shuffle uses `jax.random.permutation` with PRNG threading |
+| PBT minibatch shuffling | Shuffle minibatches with PRNG | `human_aware_rl_jax_lift.training.pbt_run` | Minibatch shuffle uses `jax.random.permutation` with PRNG threading |
 
 ---
 
@@ -92,8 +92,11 @@ The training directory is natively JAX:
 - Rollout/partner logic: `human_aware_rl_jax_lift/training/runner.py` — `make_rollout_fn`, scan-based rollout.
 - PBT training: `human_aware_rl_jax_lift/training/pbt_run.py`.
 
+<<<<<<< HEAD
 There is no separate file `training/ppo_run_jax.py`; the JAX implementation lives in `ppo_run.py`.
 
+=======
+>>>>>>> d0b5cf7 (.)
 ---
 
 ## Appendix: legacy-to-JAX symbol map

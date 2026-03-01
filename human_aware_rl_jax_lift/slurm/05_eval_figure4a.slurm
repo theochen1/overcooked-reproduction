@@ -19,6 +19,8 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 export PYTHONUNBUFFERED=1
 
 cd "$SLURM_SUBMIT_DIR/.."
+# Use same layout dir as training so PPO CNN input shape matches checkpoints
+export OVERCOOKED_LAYOUT_DIR="$(pwd)/../human_aware_rl/overcooked_ai/overcooked_ai_py/data/layouts"
 
 python -u experiments/eval_figure4a_inner.py \
   --layout "$LAYOUT" \

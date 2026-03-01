@@ -1,18 +1,17 @@
-"""On-device rollout via jax.lax.scan — eliminates the Python step loop.
+"""On-device rollout via lax.scan — no Python step loop.
 
 Supports self-play (other_agent = same policy) and BC partner (other_agent =
 batched BC policy from featurize_state_64 + BCPolicy).
 
 BC/self-play mixing semantics
 ----------------------------
-The legacy TF/py runner treats mixing as an environment-level behavior controlled
-by:
+Mixing is environment-level, controlled by:
 - self_play_randomization: probability of using self-play instead of BC
 - trajectory_sp: if True, sample the choice once per episode trajectory (per env)
   and keep it fixed until reset; if False, sample independently per env per step.
 
-This file implements the same semantics inside the scan path, and also ports the
-legacy BC "unstuck" rule (stuck_time=3) to a pure-JAX partner state.
+BC partner uses an "unstuck" rule (stuck_time=3): mask recently-taken actions
+and renormalize when the partner repeats the same position.
 """
 
 from dataclasses import dataclass
