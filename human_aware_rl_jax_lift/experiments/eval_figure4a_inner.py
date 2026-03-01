@@ -94,16 +94,39 @@ def _ppo_cnn_flatten_size(terrain) -> int:
 
 
 def _check_ppo_params_for_terrain(terrain, params: dict, run_name: str = "") -> None:
-    """Raise if loaded PPO params were trained with a different layout (CNN input shape mismatch)."""
+    """Raise if loaded PPO params were trained with a different layout (CNN input shape mismatch).
+
+    PPO checkpoints are saved from Flax and typically have structure:
+      params = {"params": {"Conv_0": ..., "Dense_0": ...}}
+    but some older artifacts may already be unwrapped to:
+      params = {"Conv_0": ..., "Dense_0": ...}
+
+    This helper accepts both.
+    """
     expected = _ppo_cnn_flatten_size(terrain)
+
+    def _has(x, k: str) -> bool:
+        try:
+            return k in x
+        except Exception:
+            return False
+
+    # Unwrap Flax TrainState params dict if needed.
+    tree = params
+    if _has(params, "params") and _has(params["params"], "Dense_0"):
+        tree = params["params"]
+
     try:
-        kernel = params["Dense_0"]["kernel"]
+        kernel = tree["Dense_0"]["kernel"]
         actual = int(kernel.shape[0])
     except (KeyError, TypeError) as e:
         raise ValueError(
             f"PPO params have unexpected structure (missing Dense_0/kernel). "
-            f"Run={run_name}. Error: {e}"
+            f"Run={run_name}. "
+            f"Top-level keys={list(params.keys()) if hasattr(params, 'keys') else type(params)}. "
+            f"Error: {e}"
         ) from e
+
     if actual != expected:
         raise ValueError(
             f"PPO checkpoint was trained with a different layout: "
