@@ -240,7 +240,7 @@ def main():
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="best",
+        default="final",
         choices=["best", "final"],
         help="Which PPO checkpoint to evaluate: 'best' (default) or 'final' (ppo_agent).",
     )
