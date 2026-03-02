@@ -87,51 +87,53 @@ def _load_bc_params(best_paths: dict, layout: str, split: str) -> dict:
     return params
 
 
-def _ppo_cnn_flatten_size(terrain) -> int:
-    """Expected Dense_0 input size for ActorCriticCNN: (H-2)*(W-2)*25 from grid (H, W)."""
-    h, w = terrain.grid.shape
-    return (h - 2) * (w - 2) * 25
+def _dense0_in_dim(variables: dict) -> int:
+    """Return Dense_0 input dim for ActorCriticCNN variables dict.
+
+    Accepts either a Flax variables dict (with top-level 'params') or an
+    already-unwrapped params dict.
+    """
+    tree = variables
+    if isinstance(variables, dict) and "params" in variables and isinstance(variables["params"], dict):
+        tree = variables["params"]
+    kernel = tree["Dense_0"]["kernel"]
+    return int(kernel.shape[0])
+
+
+def _expected_dense0_in_dim_for_terrain(terrain) -> int:
+    """Compute expected Dense_0 input dim by initializing the model on this terrain's obs shape."""
+    rng = jax.random.PRNGKey(0)
+    bstate = make_batched_state(terrain, 1, rng, randomize_agent_idx=False)
+    obs0, _obs1 = encode_obs(terrain, bstate)
+    variables = ActorCriticCNN().init(jax.random.PRNGKey(0), obs0)
+    return _dense0_in_dim(variables)
 
 
 def _check_ppo_params_for_terrain(terrain, params: dict, run_name: str = "") -> None:
-    """Raise if loaded PPO params were trained with a different layout (CNN input shape mismatch).
-
-    PPO checkpoints are saved from Flax and typically have structure:
-      params = {"params": {"Conv_0": ..., "Dense_0": ...}}
-    but some older artifacts may already be unwrapped to:
-      params = {"Conv_0": ..., "Dense_0": ...}
-
-    This helper accepts both.
-    """
-    expected = _ppo_cnn_flatten_size(terrain)
-
-    def _has(x, k: str) -> bool:
-        try:
-            return k in x
-        except Exception:
-            return False
-
-    # Unwrap Flax TrainState params dict if needed.
-    tree = params
-    if _has(params, "params") and _has(params["params"], "Dense_0"):
-        tree = params["params"]
+    """Raise if loaded PPO params were trained with a different layout (CNN input shape mismatch)."""
+    try:
+        expected = _expected_dense0_in_dim_for_terrain(terrain)
+    except Exception as e:
+        raise ValueError(
+            f"Could not compute expected PPO Dense_0 input dim for current terrain. "
+            f"Run={run_name}. Error: {type(e).__name__}: {e}"
+        ) from e
 
     try:
-        kernel = tree["Dense_0"]["kernel"]
-        actual = int(kernel.shape[0])
-    except (KeyError, TypeError) as e:
+        actual = _dense0_in_dim(params)
+    except Exception as e:
         raise ValueError(
             f"PPO params have unexpected structure (missing Dense_0/kernel). "
             f"Run={run_name}. "
             f"Top-level keys={list(params.keys()) if hasattr(params, 'keys') else type(params)}. "
-            f"Error: {e}"
+            f"Error: {type(e).__name__}: {e}"
         ) from e
 
     if actual != expected:
         raise ValueError(
-            f"PPO checkpoint was trained with a different layout: "
+            f"PPO checkpoint was trained with a different layout (or different obs encoding): "
             f"Dense_0 input size is {actual} but current layout needs {expected}. "
-            f"Run={run_name}. Ensure OVERCOOKED_LAYOUT_DIR is the same as during training "
+            f"Run={run_name}. Ensure OVERCOOKED_LAYOUT_DIR and obs encoding match training, "
             f"and that you are loading the run for this layout."
         )
 
