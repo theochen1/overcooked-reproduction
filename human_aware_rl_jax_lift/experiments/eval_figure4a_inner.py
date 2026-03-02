@@ -1,20 +1,35 @@
 """Figure 4A evaluation (inner loop).
 
-This script evaluates a trained PPO policy paired with:
-- BC(train) (paper's "BC" partner)
-- BC(test) (paper's held-out human proxy / HProxy)
+This script writes results in the legacy contract expected by:
+- human_aware_rl_jax_lift/experiments/prepare_results.py
+- human_aware_rl_jax_lift/experiments/figure4a.py
 
-Compatibility goals
+It is designed to run under the SLURM wrapper:
+  human_aware_rl_jax_lift/slurm/05_eval_figure4a.slurm
+
+Output contract
+--------------
+Writes a single JSON object to:
+  {out_dir}/results_{layout}.json
+
+with schema:
+  results[layout_key][condition][seed_idx] -> float
+  results[layout_key]["gold_standard"] -> float
+
+where:
+- layout is the short SLURM layout name (simple, unident_s, random0, random1, random3)
+- layout_key matches figure4a.py's LAYOUT_ORDER
+- condition keys match figure4a.py's CONDITION_ORDER
+- seed_idx are contiguous integers starting at 0 (0..4 for the paper)
+
+Checkpoint semantics
 -------------------
-- Works when executed from repo root (imports as human_aware_rl_jax_lift.*)
-- Works with the existing SLURM wrapper human_aware_rl_jax_lift/slurm/05_eval_figure4a.slurm
-  which runs from inside the human_aware_rl_jax_lift/ directory.
+Default behavior mirrors legacy: prefer "best" if available, else fallback to "final".
 
-Patch notes (2026-03):
-- --seed is now optional; if omitted, we auto-discover seed*/ directories.
-- Accept legacy flag aliases: --num_games, --bc_paths_file, --out_dir.
-- Add optional JSON output to --out_dir.
-- Define a local `shaping` alias (0.0) for robustness against older edits.
+Notes
+-----
+- Evaluation uses sparse reward only (shaping = 0.0) and horizon = 400.
+- Policies are evaluated stochastically.
 """
 
 import argparse
@@ -22,7 +37,7 @@ import json
 import pickle
 import sys
 from pathlib import Path
-from typing import Callable, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 # Ensure repo root is on sys.path even when launched from human_aware_rl_jax_lift/
 _THIS = Path(__file__).resolve()
@@ -38,6 +53,16 @@ from human_aware_rl_jax_lift.agents.ppo.model import ActorCriticCNN
 from human_aware_rl_jax_lift.env.layouts import parse_layout
 from human_aware_rl_jax_lift.training.partners import BCPartner
 from human_aware_rl_jax_lift.training.vec_env import batched_step, encode_obs, make_batched_state
+
+
+# Dir convention (SLURM layout names) -> figure4a.py layout keys
+_LAYOUT_KEY = {
+    "simple": "cramped_room",
+    "unident_s": "asymmetric_advantages",
+    "random1": "coordination_ring",
+    "random0": "forced_coordination",
+    "random3": "counter_circuit",
+}
 
 
 def _load_bc_params(best_paths_file: Path, split: str, layout_name: str):
@@ -73,6 +98,7 @@ def _load_ppo_params(
     if ckpt not in ("best", "final"):
         raise ValueError(f"Invalid ckpt='{ckpt}'. Expected 'best' or 'final'.")
 
+    # Legacy semantics: try best if available, else final.
     if ckpt == "best":
         out = _try(best_dir)
         if out is not None:
@@ -116,11 +142,11 @@ def _discover_seeds(run_dir: Path) -> List[int]:
     return seeds
 
 
-def make_ppo_policy(params, *, stochastic: bool = True) -> Callable:
+def make_ppo_act(params, *, stochastic: bool = True) -> Callable:
     model = ActorCriticCNN(num_actions=6, num_filters=25, hidden_dim=32)
     apply_fn = jax.jit(model.apply)
 
-    def act(obs_batch, rng: jax.Array):
+    def act(obs_batch, rng: jax.Array, **_kwargs):
         logits, _ = apply_fn(params, jnp.asarray(obs_batch, dtype=jnp.float32))
         if stochastic:
             a = jax.random.categorical(rng, logits, axis=-1)
@@ -131,45 +157,50 @@ def make_ppo_policy(params, *, stochastic: bool = True) -> Callable:
     return act
 
 
-def _eval_pair(
+def make_bc_act(params, terrain, *, stochastic: bool = True) -> Callable:
+    partner = BCPartner(params=params, terrain=terrain, stochastic=stochastic)
+
+    def act(obs_batch, rng: jax.Array, *, states, agent_idx):
+        return partner.act(
+            np.asarray(obs_batch),
+            rng,
+            states=states,
+            agent_idx=agent_idx,
+        )
+
+    return act
+
+
+def _eval_joint(
     terrain,
-    ppo_policy_fn: Callable,
-    partner_params: dict,
+    act0: Callable,
+    act1: Callable,
     *,
     rng: jax.Array,
     num_envs: int,
     horizon: int,
     n_episodes: int,
-    ppo_agent_idx: int,
-):
+) -> float:
     rng, env_rng = jax.random.split(rng)
     bstate = make_batched_state(terrain, num_envs, env_rng, randomize_agent_idx=False)
-    bstate = bstate.replace(agent_idx=jnp.full((num_envs,), int(ppo_agent_idx), dtype=jnp.int32))
+    # Keep player assignment fixed so obs0/obs1 correspond to physical player0/player1.
+    bstate = bstate.replace(agent_idx=jnp.zeros((num_envs,), dtype=jnp.int32))
     obs0, obs1 = encode_obs(terrain, bstate)
 
-    partner = BCPartner(params=partner_params, terrain=terrain, stochastic=True)
-
-    ep_returns = []
+    ep_returns: List[float] = []
     ep_ret = np.zeros((num_envs,), dtype=np.float32)
 
     n_blocks = int(np.ceil(float(n_episodes) / float(num_envs)))
     max_steps = horizon * max(1, n_blocks)
 
+    shaping = jnp.asarray(0.0, dtype=jnp.float32)  # sparse-only eval
     player_order_actions = False
-
-    # Sparse-only evaluation: shaping is always 0.0
-    shaping = jnp.asarray(0.0, dtype=jnp.float32)
 
     for _ in range(max_steps):
         rng, k0, k1, kres = jax.random.split(rng, 4)
 
-        a0 = ppo_policy_fn(obs0, k0)
-        a1 = partner.act(
-            np.asarray(obs1),
-            k1,
-            states=bstate.states,
-            agent_idx=np.asarray(bstate.agent_idx),
-        )
+        a0 = act0(obs0, k0, states=bstate.states, agent_idx=np.asarray(bstate.agent_idx))
+        a1 = act1(obs1, k1, states=bstate.states, agent_idx=np.asarray(bstate.agent_idx))
 
         reset_keys = jax.random.split(kres, num_envs)
         bstate, obs0, obs1, _rewards, dones, sparse_r = batched_step(
@@ -197,7 +228,27 @@ def _eval_pair(
     return float(np.mean(ep_returns[:n_episodes]))
 
 
-def main():
+def _load_first_available(
+    ppo_runs_dir: Path,
+    run_names: Tuple[str, ...],
+    *,
+    seed: int,
+    ckpt: str,
+) -> Tuple[str, dict]:
+    last_err: Optional[Exception] = None
+    for name in run_names:
+        try:
+            return name, _load_ppo_params(ppo_runs_dir, name, seed, ckpt=ckpt)
+        except FileNotFoundError as e:
+            last_err = e
+            continue
+    raise FileNotFoundError(
+        f"Could not load PPO checkpoint for seed={seed} from any of: {run_names}. "
+        f"Last error: {last_err}"
+    )
+
+
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--layout", required=True)
 
@@ -205,7 +256,7 @@ def main():
         "--seed",
         type=int,
         default=None,
-        help="Optional. If omitted, auto-discovers all seed*/ runs under the PPO run dir.",
+        help="Optional. If omitted, auto-discovers seed*/ directories and takes the first --num_seeds.",
     )
 
     parser.add_argument("--num_envs", type=int, default=30)
@@ -217,6 +268,13 @@ def main():
         type=int,
         default=200,
         help="Number of episodes (games) to evaluate per condition.",
+    )
+
+    parser.add_argument(
+        "--num_seeds",
+        type=int,
+        default=5,
+        help="How many seeds to include when auto-discovering (default: 5).",
     )
 
     parser.add_argument("--ppo_runs_dir", type=str, default="data/ppo_runs")
@@ -234,19 +292,23 @@ def main():
         "--out_dir",
         type=str,
         default=None,
-        help="Optional. If set, write a JSON file of per-seed results into this directory.",
+        help="If set, write results_{layout}.json into this directory.",
     )
 
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="final",
+        default="best",
         choices=["best", "final"],
-        help="Which PPO checkpoint to evaluate: 'best' (default) or 'final' (ppo_agent).",
+        help="Which PPO checkpoint to evaluate: 'best' (default; fallback to final) or 'final'.",
     )
     args = parser.parse_args()
 
     layout = args.layout
+    if layout not in _LAYOUT_KEY:
+        raise KeyError(f"Unknown layout '{layout}'. Expected one of: {sorted(_LAYOUT_KEY.keys())}")
+
+    layout_key = _LAYOUT_KEY[layout]
     horizon = 400
 
     terrain = parse_layout(layout)
@@ -256,83 +318,187 @@ def main():
     hproxy_params = _load_bc_params(best_paths_file, "test", layout)
 
     ppo_runs_dir = Path(args.ppo_runs_dir)
-    run_names = (f"ppo_bc_test_{layout}", f"ppo_bc_{layout}", f"ppo_bc_test_{layout}_v0")
+
+    # Prefer the explicit legacy names first, but keep fallbacks for older dirs.
+    ppo_sp_runs = (f"ppo_sp_{layout}",)
+    ppo_bc_runs = (f"ppo_bc_train_{layout}", f"ppo_bc_{layout}")
+    ppo_gs_runs = (f"ppo_bc_test_{layout}", f"ppo_bc_test_{layout}_v0")
 
     if args.seed is None:
-        run_dir = _first_existing_run_dir(ppo_runs_dir, run_names)
-        seeds = _discover_seeds(run_dir)
+        seed_discovery_dir = _first_existing_run_dir(
+            ppo_runs_dir,
+            ppo_sp_runs + ppo_bc_runs + ppo_gs_runs,
+        )
+        discovered = _discover_seeds(seed_discovery_dir)
+        seeds = discovered[: int(args.num_seeds)]
+        if len(seeds) < int(args.num_seeds):
+            print(
+                f"WARNING: discovered only {len(seeds)} seeds under {seed_discovery_dir}; "
+                f"figure4a.py expects {args.num_seeds}."
+            )
     else:
         seeds = [int(args.seed)]
 
-    results = []
-    for seed in seeds:
-        ppo_params = None
-        used_name = None
-        for name in run_names:
-            try:
-                ppo_params = _load_ppo_params(ppo_runs_dir, name, seed, ckpt=args.ckpt)
-                used_name = name
-                break
-            except FileNotFoundError:
-                continue
-        if ppo_params is None:
-            raise FileNotFoundError(
-                f"Could not load PPO checkpoint for layout={layout} seed={seed} in {ppo_runs_dir}"
-            )
+    seed_to_idx: Dict[int, int] = {s: i for i, s in enumerate(sorted(seeds))}
 
-        ppo_policy = make_ppo_policy(ppo_params, stochastic=True)
+    row: Dict[str, dict] = {
+        "SP_SP": {},
+        "SP_HProxy": {},
+        "PPOBC_HProxy": {},
+        "BC_HProxy": {},
+        "SP_HProxy_sw": {},
+        "PPOBC_HProxy_sw": {},
+        "BC_HProxy_sw": {},
+        "gold_standard": None,
+    }
+
+    gold_vals: List[float] = []
+
+    for seed in sorted(seeds):
+        seed_idx = seed_to_idx[seed]
+
+        sp_name, sp_params = _load_first_available(
+            ppo_runs_dir, ppo_sp_runs, seed=seed, ckpt=args.ckpt
+        )
+        bc_name, bc_params = _load_first_available(
+            ppo_runs_dir, ppo_bc_runs, seed=seed, ckpt=args.ckpt
+        )
+        gs_name, gs_params = _load_first_available(
+            ppo_runs_dir, ppo_gs_runs, seed=seed, ckpt=args.ckpt
+        )
+
+        sp_act = make_ppo_act(sp_params, stochastic=True)
+        ppo_bc_act = make_ppo_act(bc_params, stochastic=True)
+        gs_act = make_ppo_act(gs_params, stochastic=True)
+
+        bc_train_act = make_bc_act(bc_train_params, terrain, stochastic=True)
+        hproxy_act = make_bc_act(hproxy_params, terrain, stochastic=True)
+
         rng = jax.random.PRNGKey(0)
 
-        v0 = _eval_pair(
+        v_sp_sp = _eval_joint(
             terrain,
-            ppo_policy,
-            hproxy_params,
+            sp_act,
+            sp_act,
             rng=rng,
             num_envs=args.num_envs,
             horizon=horizon,
             n_episodes=args.n_episodes,
-            ppo_agent_idx=0,
-        )
-        v1 = _eval_pair(
-            terrain,
-            ppo_policy,
-            hproxy_params,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
-            ppo_agent_idx=1,
         )
 
-        v_bc = _eval_pair(
+        v_sp_hp = _eval_joint(
             terrain,
-            ppo_policy,
-            bc_train_params,
+            sp_act,
+            hproxy_act,
             rng=rng,
             num_envs=args.num_envs,
             horizon=horizon,
             n_episodes=args.n_episodes,
-            ppo_agent_idx=0,
+        )
+        v_sp_hp_sw = _eval_joint(
+            terrain,
+            hproxy_act,
+            sp_act,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
         )
 
-        out = {
-            "layout": layout,
-            "seed": seed,
-            "ckpt": args.ckpt,
-            "ppo_run_name": used_name,
-            "gold_standard_mean": 0.5 * (v0 + v1),
-            "gold_standard_v0": v0,
-            "gold_standard_v1": v1,
-            "ppo_plus_bc_train": v_bc,
-        }
-        results.append(out)
-        print(out)
+        v_ppobc_hp = _eval_joint(
+            terrain,
+            ppo_bc_act,
+            hproxy_act,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
+        )
+        v_ppobc_hp_sw = _eval_joint(
+            terrain,
+            hproxy_act,
+            ppo_bc_act,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
+        )
+
+        v_bc_hp = _eval_joint(
+            terrain,
+            bc_train_act,
+            hproxy_act,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
+        )
+        v_bc_hp_sw = _eval_joint(
+            terrain,
+            hproxy_act,
+            bc_train_act,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
+        )
+
+        v_gs_0 = _eval_joint(
+            terrain,
+            gs_act,
+            hproxy_act,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
+        )
+        v_gs_1 = _eval_joint(
+            terrain,
+            hproxy_act,
+            gs_act,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
+        )
+        gold_vals.append(0.5 * (v_gs_0 + v_gs_1))
+
+        row["SP_SP"][seed_idx] = v_sp_sp
+        row["SP_HProxy"][seed_idx] = v_sp_hp
+        row["SP_HProxy_sw"][seed_idx] = v_sp_hp_sw
+        row["PPOBC_HProxy"][seed_idx] = v_ppobc_hp
+        row["PPOBC_HProxy_sw"][seed_idx] = v_ppobc_hp_sw
+        row["BC_HProxy"][seed_idx] = v_bc_hp
+        row["BC_HProxy_sw"][seed_idx] = v_bc_hp_sw
+
+        print(
+            {
+                "layout": layout,
+                "layout_key": layout_key,
+                "seed": seed,
+                "seed_idx": seed_idx,
+                "ckpt": args.ckpt,
+                "ppo_sp_run_name": sp_name,
+                "ppo_bc_run_name": bc_name,
+                "ppo_gold_run_name": gs_name,
+                "SP_SP": v_sp_sp,
+                "SP_HProxy": v_sp_hp,
+                "PPOBC_HProxy": v_ppobc_hp,
+                "BC_HProxy": v_bc_hp,
+                "gold_standard": gold_vals[-1],
+            }
+        )
+
+    row["gold_standard"] = float(np.mean(np.asarray(gold_vals, dtype=np.float64))) if gold_vals else None
+
+    out_obj = {layout_key: row}
 
     if args.out_dir is not None:
         out_dir = Path(args.out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"fig4a_inner_{layout}_{args.ckpt}.json"
-        out_path.write_text(json.dumps(results, indent=2) + "\n")
+        out_path = out_dir / f"results_{layout}.json"
+        out_path.write_text(json.dumps(out_obj, indent=2) + "\n")
+        print(f"✓ Wrote: {out_path}")
 
 
 if __name__ == "__main__":
