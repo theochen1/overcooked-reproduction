@@ -30,6 +30,8 @@ Notes
 -----
 - Evaluation uses sparse reward only (shaping = 0.0) and horizon = 400.
 - Policies are evaluated stochastically.
+- Different PPO runs may have different raw seed folder names (e.g., seed184 vs seed386).
+  To avoid spurious failures, we discover seeds per *run group* (SP vs PPOBC vs gold).
 """
 
 import argparse
@@ -140,6 +142,27 @@ def _discover_seeds(run_dir: Path) -> List[int]:
     if not seeds:
         raise FileNotFoundError(f"No seed*/ directories found under {run_dir}")
     return seeds
+
+
+def _seeds_for_group(
+    *,
+    ppo_runs_dir: Path,
+    run_names: Tuple[str, ...],
+    num_seeds: int,
+    seed_override: Optional[int],
+    group_name: str,
+) -> List[int]:
+    if seed_override is not None:
+        return [int(seed_override)]
+
+    run_dir = _first_existing_run_dir(ppo_runs_dir, run_names)
+    discovered = _discover_seeds(run_dir)
+    if len(discovered) < int(num_seeds):
+        raise FileNotFoundError(
+            f"Not enough seeds for group '{group_name}'. Found {len(discovered)} under {run_dir}, "
+            f"need {num_seeds}."
+        )
+    return discovered[: int(num_seeds)]
 
 
 def make_ppo_act(params, *, stochastic: bool = True) -> Callable:
@@ -256,7 +279,7 @@ def main() -> None:
         "--seed",
         type=int,
         default=None,
-        help="Optional. If omitted, auto-discovers seed*/ directories and takes the first --num_seeds.",
+        help="Optional. If set, evaluates only this raw seed for PPO conditions.",
     )
 
     parser.add_argument("--num_envs", type=int, default=30)
@@ -310,12 +333,16 @@ def main() -> None:
 
     layout_key = _LAYOUT_KEY[layout]
     horizon = 400
+    num_slots = 1 if args.seed is not None else int(args.num_seeds)
 
     terrain = parse_layout(layout)
 
     best_paths_file = Path(args.best_bc_paths)
     bc_train_params = _load_bc_params(best_paths_file, "train", layout)
     hproxy_params = _load_bc_params(best_paths_file, "test", layout)
+
+    bc_train_act = make_bc_act(bc_train_params, terrain, stochastic=True)
+    hproxy_act = make_bc_act(hproxy_params, terrain, stochastic=True)
 
     ppo_runs_dir = Path(args.ppo_runs_dir)
 
@@ -324,22 +351,27 @@ def main() -> None:
     ppo_bc_runs = (f"ppo_bc_train_{layout}", f"ppo_bc_{layout}")
     ppo_gs_runs = (f"ppo_bc_test_{layout}", f"ppo_bc_test_{layout}_v0")
 
-    if args.seed is None:
-        seed_discovery_dir = _first_existing_run_dir(
-            ppo_runs_dir,
-            ppo_sp_runs + ppo_bc_runs + ppo_gs_runs,
-        )
-        discovered = _discover_seeds(seed_discovery_dir)
-        seeds = discovered[: int(args.num_seeds)]
-        if len(seeds) < int(args.num_seeds):
-            print(
-                f"WARNING: discovered only {len(seeds)} seeds under {seed_discovery_dir}; "
-                f"figure4a.py expects {args.num_seeds}."
-            )
-    else:
-        seeds = [int(args.seed)]
-
-    seed_to_idx: Dict[int, int] = {s: i for i, s in enumerate(sorted(seeds))}
+    sp_seeds = _seeds_for_group(
+        ppo_runs_dir=ppo_runs_dir,
+        run_names=ppo_sp_runs,
+        num_seeds=num_slots,
+        seed_override=args.seed,
+        group_name="SP",
+    )
+    bc_seeds = _seeds_for_group(
+        ppo_runs_dir=ppo_runs_dir,
+        run_names=ppo_bc_runs,
+        num_seeds=num_slots,
+        seed_override=args.seed,
+        group_name="PPOBC",
+    )
+    gs_seeds = _seeds_for_group(
+        ppo_runs_dir=ppo_runs_dir,
+        run_names=ppo_gs_runs,
+        num_seeds=num_slots,
+        seed_override=args.seed,
+        group_name="GoldStandard",
+    )
 
     row: Dict[str, dict] = {
         "SP_SP": {},
@@ -352,30 +384,38 @@ def main() -> None:
         "gold_standard": None,
     }
 
-    gold_vals: List[float] = []
+    # BC+HProxy does not depend on PPO seeds; compute once and replicate.
+    rng = jax.random.PRNGKey(0)
+    v_bc_hp = _eval_joint(
+        terrain,
+        bc_train_act,
+        hproxy_act,
+        rng=rng,
+        num_envs=args.num_envs,
+        horizon=horizon,
+        n_episodes=args.n_episodes,
+    )
+    v_bc_hp_sw = _eval_joint(
+        terrain,
+        hproxy_act,
+        bc_train_act,
+        rng=rng,
+        num_envs=args.num_envs,
+        horizon=horizon,
+        n_episodes=args.n_episodes,
+    )
+    for seed_idx in range(num_slots):
+        row["BC_HProxy"][seed_idx] = v_bc_hp
+        row["BC_HProxy_sw"][seed_idx] = v_bc_hp_sw
 
-    for seed in sorted(seeds):
-        seed_idx = seed_to_idx[seed]
-
+    # SP-based conditions
+    for seed_idx, seed in enumerate(sp_seeds):
         sp_name, sp_params = _load_first_available(
             ppo_runs_dir, ppo_sp_runs, seed=seed, ckpt=args.ckpt
         )
-        bc_name, bc_params = _load_first_available(
-            ppo_runs_dir, ppo_bc_runs, seed=seed, ckpt=args.ckpt
-        )
-        gs_name, gs_params = _load_first_available(
-            ppo_runs_dir, ppo_gs_runs, seed=seed, ckpt=args.ckpt
-        )
-
         sp_act = make_ppo_act(sp_params, stochastic=True)
-        ppo_bc_act = make_ppo_act(bc_params, stochastic=True)
-        gs_act = make_ppo_act(gs_params, stochastic=True)
-
-        bc_train_act = make_bc_act(bc_train_params, terrain, stochastic=True)
-        hproxy_act = make_bc_act(hproxy_params, terrain, stochastic=True)
 
         rng = jax.random.PRNGKey(0)
-
         v_sp_sp = _eval_joint(
             terrain,
             sp_act,
@@ -385,7 +425,6 @@ def main() -> None:
             horizon=horizon,
             n_episodes=args.n_episodes,
         )
-
         v_sp_hp = _eval_joint(
             terrain,
             sp_act,
@@ -405,6 +444,32 @@ def main() -> None:
             n_episodes=args.n_episodes,
         )
 
+        row["SP_SP"][seed_idx] = v_sp_sp
+        row["SP_HProxy"][seed_idx] = v_sp_hp
+        row["SP_HProxy_sw"][seed_idx] = v_sp_hp_sw
+
+        print(
+            {
+                "layout": layout,
+                "layout_key": layout_key,
+                "seed": seed,
+                "seed_idx": seed_idx,
+                "ckpt": args.ckpt,
+                "ppo_sp_run_name": sp_name,
+                "SP_SP": v_sp_sp,
+                "SP_HProxy": v_sp_hp,
+                "SP_HProxy_sw": v_sp_hp_sw,
+            }
+        )
+
+    # PPO_BC-based conditions
+    for seed_idx, seed in enumerate(bc_seeds):
+        bc_name, bc_params = _load_first_available(
+            ppo_runs_dir, ppo_bc_runs, seed=seed, ckpt=args.ckpt
+        )
+        ppo_bc_act = make_ppo_act(bc_params, stochastic=True)
+
+        rng = jax.random.PRNGKey(0)
         v_ppobc_hp = _eval_joint(
             terrain,
             ppo_bc_act,
@@ -424,25 +489,31 @@ def main() -> None:
             n_episodes=args.n_episodes,
         )
 
-        v_bc_hp = _eval_joint(
-            terrain,
-            bc_train_act,
-            hproxy_act,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
-        )
-        v_bc_hp_sw = _eval_joint(
-            terrain,
-            hproxy_act,
-            bc_train_act,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
+        row["PPOBC_HProxy"][seed_idx] = v_ppobc_hp
+        row["PPOBC_HProxy_sw"][seed_idx] = v_ppobc_hp_sw
+
+        print(
+            {
+                "layout": layout,
+                "layout_key": layout_key,
+                "seed": seed,
+                "seed_idx": seed_idx,
+                "ckpt": args.ckpt,
+                "ppo_bc_run_name": bc_name,
+                "PPOBC_HProxy": v_ppobc_hp,
+                "PPOBC_HProxy_sw": v_ppobc_hp_sw,
+            }
         )
 
+    # Gold standard: PPO trained with HProxy, paired with HProxy.
+    gold_vals: List[float] = []
+    for seed_idx, seed in enumerate(gs_seeds):
+        gs_name, gs_params = _load_first_available(
+            ppo_runs_dir, ppo_gs_runs, seed=seed, ckpt=args.ckpt
+        )
+        gs_act = make_ppo_act(gs_params, stochastic=True)
+
+        rng = jax.random.PRNGKey(0)
         v_gs_0 = _eval_joint(
             terrain,
             gs_act,
@@ -463,14 +534,6 @@ def main() -> None:
         )
         gold_vals.append(0.5 * (v_gs_0 + v_gs_1))
 
-        row["SP_SP"][seed_idx] = v_sp_sp
-        row["SP_HProxy"][seed_idx] = v_sp_hp
-        row["SP_HProxy_sw"][seed_idx] = v_sp_hp_sw
-        row["PPOBC_HProxy"][seed_idx] = v_ppobc_hp
-        row["PPOBC_HProxy_sw"][seed_idx] = v_ppobc_hp_sw
-        row["BC_HProxy"][seed_idx] = v_bc_hp
-        row["BC_HProxy_sw"][seed_idx] = v_bc_hp_sw
-
         print(
             {
                 "layout": layout,
@@ -478,14 +541,8 @@ def main() -> None:
                 "seed": seed,
                 "seed_idx": seed_idx,
                 "ckpt": args.ckpt,
-                "ppo_sp_run_name": sp_name,
-                "ppo_bc_run_name": bc_name,
                 "ppo_gold_run_name": gs_name,
-                "SP_SP": v_sp_sp,
-                "SP_HProxy": v_sp_hp,
-                "PPOBC_HProxy": v_ppobc_hp,
-                "BC_HProxy": v_bc_hp,
-                "gold_standard": gold_vals[-1],
+                "gold_standard_seed": gold_vals[-1],
             }
         )
 
