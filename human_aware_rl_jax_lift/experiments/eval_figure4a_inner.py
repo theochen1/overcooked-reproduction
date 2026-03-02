@@ -4,17 +4,30 @@ This script evaluates a trained PPO policy paired with:
 - BC(train) (paper's "BC" partner)
 - BC(test) (paper's held-out human proxy / HProxy)
 
+Compatibility goals
+-------------------
+- Works when executed from repo root (imports as human_aware_rl_jax_lift.*)
+- Works with the existing SLURM wrapper human_aware_rl_jax_lift/slurm/05_eval_figure4a.slurm
+  which runs from inside the human_aware_rl_jax_lift/ directory.
+
 Patch notes (2026-03):
-- Add --ckpt flag to choose PPO checkpoint: best/ vs ppo_agent/.
-- Fix imports to match this repo (no agents.bc.policy / agents.ppo.policy).
-- Evaluate role-swap by forcing bstate.agent_idx to 0 vs 1 (PPO as P0 vs P1)
-  rather than swapping policy-call order.
+- --seed is now optional; if omitted, we auto-discover seed*/ directories.
+- Accept legacy flag aliases: --num_games, --bc_paths_file, --out_dir.
+- Add optional JSON output to --out_dir.
 """
 
 import argparse
+import json
 import pickle
+import sys
 from pathlib import Path
-from typing import Callable, Tuple
+from typing import Callable, List, Tuple
+
+# Ensure repo root is on sys.path even when launched from human_aware_rl_jax_lift/
+_THIS = Path(__file__).resolve()
+_REPO_ROOT = _THIS.parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import jax
 import jax.numpy as jnp
@@ -44,15 +57,6 @@ def _load_ppo_params(
     *,
     ckpt: str = "best",
 ):
-    """Load PPO checkpoint params.
-
-    ckpt:
-      - "best": prefer seed*/best/params.pkl, fall back to seed*/ppo_agent/params.pkl
-      - "final": prefer seed*/ppo_agent/params.pkl, fall back to seed*/best/params.pkl
-
-    The fallback makes the flag robust to older run dirs that may only have one
-    of the two.
-    """
     seed_dir = ppo_runs_dir / run_name / f"seed{seed}"
     best_dir = seed_dir / "best"
     final_dir = seed_dir / "ppo_agent"
@@ -89,19 +93,26 @@ def _load_ppo_params(
     )
 
 
-def load_first_existing(
-    ppo_runs_dir: Path,
-    run_names: Tuple[str, ...],
-    seed: int,
-    *,
-    ckpt: str,
-):
+def _first_existing_run_dir(ppo_runs_dir: Path, run_names: Tuple[str, ...]) -> Path:
     for name in run_names:
-        try:
-            return _load_ppo_params(ppo_runs_dir, name, seed, ckpt=ckpt)
-        except FileNotFoundError:
+        d = ppo_runs_dir / name
+        if d.exists() and d.is_dir():
+            return d
+    raise FileNotFoundError(f"None of these PPO run dirs exist under {ppo_runs_dir}: {run_names}")
+
+
+def _discover_seeds(run_dir: Path) -> List[int]:
+    seeds: List[int] = []
+    for p in run_dir.glob("seed*"):
+        if not p.is_dir():
             continue
-    raise FileNotFoundError(f"None of the PPO run names exist for seed={seed}: {run_names}")
+        s = p.name.replace("seed", "")
+        if s.isdigit():
+            seeds.append(int(s))
+    seeds.sort()
+    if not seeds:
+        raise FileNotFoundError(f"No seed*/ directories found under {run_dir}")
+    return seeds
 
 
 def make_ppo_policy(params, *, stochastic: bool = True) -> Callable:
@@ -122,7 +133,7 @@ def make_ppo_policy(params, *, stochastic: bool = True) -> Callable:
 def _eval_pair(
     terrain,
     ppo_policy_fn: Callable,
-    partner: BCPartner,
+    partner_params: dict,
     *,
     rng: jax.Array,
     num_envs: int,
@@ -130,15 +141,12 @@ def _eval_pair(
     n_episodes: int,
     ppo_agent_idx: int,
 ):
-    """Evaluate PPO paired with a fixed BC partner; return mean sparse reward.
-
-    PPO is always treated as the "training agent" (obs0). The role swap is
-    implemented by forcing bstate.agent_idx to 0 (PPO as P0) or 1 (PPO as P1).
-    """
     rng, env_rng = jax.random.split(rng)
     bstate = make_batched_state(terrain, num_envs, env_rng, randomize_agent_idx=False)
     bstate = bstate.replace(agent_idx=jnp.full((num_envs,), int(ppo_agent_idx), dtype=jnp.int32))
     obs0, obs1 = encode_obs(terrain, bstate)
+
+    partner = BCPartner(params=partner_params, terrain=terrain, stochastic=True)
 
     ep_returns = []
     ep_ret = np.zeros((num_envs,), dtype=np.float32)
@@ -146,7 +154,6 @@ def _eval_pair(
     n_blocks = int(np.ceil(float(n_episodes) / float(num_envs)))
     max_steps = horizon * max(1, n_blocks)
 
-    # In this evaluator we want (training_action, other_action) semantics.
     player_order_actions = False
 
     for _ in range(max_steps):
@@ -189,11 +196,47 @@ def _eval_pair(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--layout", required=True)
-    parser.add_argument("--seed", type=int, required=True)
+
+    # seed is optional for SLURM compatibility
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional. If omitted, auto-discovers all seed*/ runs under the PPO run dir.",
+    )
+
     parser.add_argument("--num_envs", type=int, default=30)
-    parser.add_argument("--n_episodes", type=int, default=200)
+
+    # Accept legacy alias --num_games
+    parser.add_argument(
+        "--n_episodes",
+        "--num_games",
+        dest="n_episodes",
+        type=int,
+        default=200,
+        help="Number of episodes (games) to evaluate per condition.",
+    )
+
     parser.add_argument("--ppo_runs_dir", type=str, default="data/ppo_runs")
-    parser.add_argument("--best_bc_paths", type=str, default="data/bc_runs/best_bc_model_paths.pkl")
+
+    # Accept legacy alias --bc_paths_file
+    parser.add_argument(
+        "--best_bc_paths",
+        "--bc_paths_file",
+        dest="best_bc_paths",
+        type=str,
+        default="data/bc_runs/best_bc_model_paths.pkl",
+        help="Pickle file mapping layout -> BC model path for train/test splits.",
+    )
+
+    # Accept legacy --out_dir (optional)
+    parser.add_argument(
+        "--out_dir",
+        type=str,
+        default=None,
+        help="Optional. If set, write a JSON file of per-seed results into this directory.",
+    )
+
     parser.add_argument(
         "--ckpt",
         type=str,
@@ -204,7 +247,6 @@ def main():
     args = parser.parse_args()
 
     layout = args.layout
-    seed = int(args.seed)
     horizon = 400
 
     terrain = parse_layout(layout)
@@ -214,61 +256,81 @@ def main():
     hproxy_params = _load_bc_params(best_paths_file, "test", layout)
 
     ppo_runs_dir = Path(args.ppo_runs_dir)
-    ppo_params = load_first_existing(
-        ppo_runs_dir,
-        (f"ppo_bc_test_{layout}", f"ppo_bc_{layout}", f"ppo_bc_test_{layout}_v0"),
-        seed,
-        ckpt=args.ckpt,
-    )
+    run_names = (f"ppo_bc_test_{layout}", f"ppo_bc_{layout}", f"ppo_bc_test_{layout}_v0")
 
-    ppo_policy = make_ppo_policy(ppo_params, stochastic=True)
-    bc_train_partner = BCPartner(params=bc_train_params, terrain=terrain, stochastic=True)
-    hproxy_partner = BCPartner(params=hproxy_params, terrain=terrain, stochastic=True)
+    if args.seed is None:
+        run_dir = _first_existing_run_dir(ppo_runs_dir, run_names)
+        seeds = _discover_seeds(run_dir)
+    else:
+        seeds = [int(args.seed)]
 
-    rng = jax.random.PRNGKey(0)
+    results = []
+    for seed in seeds:
+        ppo_params = None
+        used_name = None
+        for name in run_names:
+            try:
+                ppo_params = _load_ppo_params(ppo_runs_dir, name, seed, ckpt=args.ckpt)
+                used_name = name
+                break
+            except FileNotFoundError:
+                continue
+        if ppo_params is None:
+            raise FileNotFoundError(f"Could not load PPO checkpoint for layout={layout} seed={seed} in {ppo_runs_dir}")
 
-    v0 = _eval_pair(
-        terrain,
-        ppo_policy,
-        hproxy_partner,
-        rng=rng,
-        num_envs=args.num_envs,
-        horizon=horizon,
-        n_episodes=args.n_episodes,
-        ppo_agent_idx=0,
-    )
-    v1 = _eval_pair(
-        terrain,
-        ppo_policy,
-        hproxy_partner,
-        rng=rng,
-        num_envs=args.num_envs,
-        horizon=horizon,
-        n_episodes=args.n_episodes,
-        ppo_agent_idx=1,
-    )
+        ppo_policy = make_ppo_policy(ppo_params, stochastic=True)
+        rng = jax.random.PRNGKey(0)
 
-    v_bc = _eval_pair(
-        terrain,
-        ppo_policy,
-        bc_train_partner,
-        rng=rng,
-        num_envs=args.num_envs,
-        horizon=horizon,
-        n_episodes=args.n_episodes,
-        ppo_agent_idx=0,
-    )
+        v0 = _eval_pair(
+            terrain,
+            ppo_policy,
+            hproxy_params,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
+            ppo_agent_idx=0,
+        )
+        v1 = _eval_pair(
+            terrain,
+            ppo_policy,
+            hproxy_params,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
+            ppo_agent_idx=1,
+        )
 
-    out = {
-        "layout": layout,
-        "seed": seed,
-        "ckpt": args.ckpt,
-        "gold_standard_mean": 0.5 * (v0 + v1),
-        "gold_standard_v0": v0,
-        "gold_standard_v1": v1,
-        "ppo_plus_bc_train": v_bc,
-    }
-    print(out)
+        v_bc = _eval_pair(
+            terrain,
+            ppo_policy,
+            bc_train_params,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
+            ppo_agent_idx=0,
+        )
+
+        out = {
+            "layout": layout,
+            "seed": seed,
+            "ckpt": args.ckpt,
+            "ppo_run_name": used_name,
+            "gold_standard_mean": 0.5 * (v0 + v1),
+            "gold_standard_v0": v0,
+            "gold_standard_v1": v1,
+            "ppo_plus_bc_train": v_bc,
+        }
+        results.append(out)
+        print(out)
+
+    if args.out_dir is not None:
+        out_dir = Path(args.out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"fig4a_inner_{layout}_{args.ckpt}.json"
+        out_path.write_text(json.dumps(results, indent=2) + "\n")
 
 
 if __name__ == "__main__":
