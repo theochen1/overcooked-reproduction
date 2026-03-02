@@ -9,6 +9,12 @@ Key points
   in {'bc_train','bc_test'}) inside the scanned rollout.
 - Self-play vs BC mixing is environment-level, and can be trajectory-level
   (sample once per env per episode) when config.trajectory_self_play is True.
+
+Patch note (2026-03):
+- Log sp_factor and shaping_factor into training_info.pkl.
+- Record and print metadata whenever a new "best" checkpoint is saved, including
+  sp_factor at that time. This helps diagnose whether the best checkpoint was
+  selected under self-play mixing.
 """
 
 import pickle
@@ -260,9 +266,18 @@ def ppo_run(
         )
 
         logs: Dict[str, list] = {
-            "eprewmean": [], "ep_sparse_rew_mean": [], "loss": [],
-            "policy_loss": [], "value_loss": [], "policy_entropy": [],
-            "approxkl": [], "clipfrac": [], "explained_variance": [],
+            "eprewmean": [],
+            "ep_sparse_rew_mean": [],
+            "sp_factor": [],
+            "shaping_factor": [],
+            "best_events": [],
+            "loss": [],
+            "policy_loss": [],
+            "value_loss": [],
+            "policy_entropy": [],
+            "approxkl": [],
+            "clipfrac": [],
+            "explained_variance": [],
         }
         probe_obs = None
         best_sparse = float("-inf")
@@ -347,6 +362,8 @@ def ppo_run(
             for k, v in [
                 ("eprewmean", eprewmean),
                 ("ep_sparse_rew_mean", ep_sparse),
+                ("sp_factor", float(sp_factor)),
+                ("shaping_factor", float(shaping_factor)),
                 ("loss", mean_metrics.get("loss", 0.0)),
                 ("policy_loss", mean_metrics.get("policy_loss", 0.0)),
                 ("value_loss", mean_metrics.get("value_loss", 0.0)),
@@ -386,6 +403,21 @@ def ppo_run(
             if ep_sparse > best_sparse:
                 best_sparse = ep_sparse
                 save_ppo_checkpoint(train_state.params, seed_dir / "best")
+                event = {
+                    "update": int(update + 1),
+                    "total_timesteps": int(total_steps),
+                    "ep_sparse_rew_mean": float(ep_sparse),
+                    "eprewmean": float(eprewmean),
+                    "sp_factor": float(logs["sp_factor"][-1]),
+                    "shaping_factor": float(logs["shaping_factor"][-1]),
+                }
+                logs["best_events"].append(event)
+                print(
+                    f"[{_ts(t0)}] Saved BEST checkpoint at update={event['update']} "
+                    f"timesteps={event['total_timesteps']} ep_sparse={event['ep_sparse_rew_mean']:.4f} "
+                    f"sp_factor={event['sp_factor']:.4f} shaping={event['shaping_factor']:.4f}"
+                )
+                sys.stdout.flush()
 
         save_ppo_checkpoint(train_state.params, seed_dir / "ppo_agent")
         save_training_info(logs, seed_dir / "training_info.pkl")

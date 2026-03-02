@@ -1,379 +1,263 @@
-#!/usr/bin/env python
-"""JAX-native Figure 4a evaluation (paper-faithful, Slurm-friendly).
+"""Figure 4A evaluation (inner loop).
 
-Outputs
--------
-Writes: {out_dir}/results_{layout}.json
-Format: {paper_layout_key: {condition: {seed_idx: mean_reward}, ..., "gold_standard": float}}
+This script evaluates a trained PPO policy against BC (train split) and a
+held-out human proxy (BC test split / HProxy) in the paper's Figure 4A setup.
 
-Protocol (Carroll et al., NeurIPS 2019)
---------------------------------------
-- horizon = 400 timesteps
-- 100 rollouts per (seed, condition)
-- 5 seeds per training condition (standard error computed in plotting)
-- HProxy is a held-out BC model (bc_test)
-- BC is the accessible imperfect model (bc_train)
-- gold standard: PPO trained with HProxy itself (ppo_bc_test)
-- hashed bars: swapped starting positions (swap which policy controls P0 vs P1)
-
-Notes
------
-This script intentionally avoids Docker / TensorFlow and evaluates directly from
-human_aware_rl_jax_lift checkpoints:
-- PPO checkpoints: seed{seed}/best/params.pkl (fallback seed{seed}/ppo_agent/params.pkl)
-- BC checkpoints: model.pkl + bc_metadata.pkl
-- Best BC paths map: data/bc_runs/best_bc_model_paths.pkl
-
+Patch note (2026-03):
+- Add --ckpt flag to force using either the best-checkpoint or final checkpoint
+  for PPO runs. This helps diagnose cases where "best" was selected during
+  training under self-play mixing but evaluation assumes a fixed partner.
 """
 
 import argparse
-import json
+import pickle
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, Tuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
-from human_aware_rl_jax_lift.training.checkpoints import (
-    load_best_bc_model_paths,
-    load_bc_checkpoint,
-    load_ppo_checkpoint,
-)
-
-# Inference-time models
-from human_aware_rl_jax_lift.agents.ppo.model import ActorCriticCNN
-from human_aware_rl_jax_lift.agents.bc.model import BCPolicy
-
-# JAX env/rollout utilities
 from human_aware_rl_jax_lift.env.layouts import parse_layout
-from human_aware_rl_jax_lift.training.vec_env import make_batched_state, encode_obs, batched_step
-from human_aware_rl_jax_lift.training.runner import (
-    _init_bc_partner_state,
-    _push_history,
-    _unstuck_adjust_probs,
-)
-from human_aware_rl_jax_lift.encoding.bc_features import featurize_state_64
-
-# Paper BC unstuck rule (same as PPO-BC training)
-BC_STUCK_TIME = 3
-
-HORIZON = 400
-
-# Short layout name -> paper key used by figure4a.py
-LAYOUT_KEY = {
-    "simple": "cramped_room",
-    "unident_s": "asymmetric_advantages",
-    "random1": "coordination_ring",
-    "random0": "forced_coordination",
-    "random3": "counter_circuit",
-}
-
-# Seed tables (match paper reproduction / TF baselines)
-PPO_SP_SEEDS: List[int] = [2229, 386, 7225, 7649, 9807]
-PPO_BC_TEST_SEEDS: List[int] = [184, 2888, 4467, 7360, 7424]   # PPO trained with HProxy (gold standard)
-PPO_BC_TRAIN_SEEDS: List[int] = [1887, 516, 5578, 5987, 9456]  # PPO trained with BC_train
+from human_aware_rl_jax_lift.training.vec_env import batched_step, encode_obs, make_batched_state
+from human_aware_rl_jax_lift.agents.bc.policy import make_bc_policy
+from human_aware_rl_jax_lift.agents.ppo.policy import make_ppo_policy
 
 
-def _maybe_logits(output):
-    if isinstance(output, tuple) and len(output) >= 1:
-        return output[0]
-    return output
+def _load_bc_params(best_paths_file: Path, split: str, layout_name: str):
+    with best_paths_file.open("rb") as f:
+        best_paths = pickle.load(f)
+    bc_path = Path(best_paths[split][layout_name])
+    if bc_path.is_dir():
+        bc_path = bc_path / "model.pkl"
+    with bc_path.open("rb") as f:
+        payload = pickle.load(f)
+    return payload.get("params", payload) if isinstance(payload, dict) else payload
 
 
-def _load_bc_params(best_paths: dict, layout: str, split: str) -> dict:
-    bc_dir = Path(best_paths[split][layout])
-    bc_dir = bc_dir if bc_dir.is_dir() else bc_dir.parent
-    params, _meta = load_bc_checkpoint(bc_dir)
-    return params
+def _load_ppo_params(
+    ppo_runs_dir: Path,
+    run_name: str,
+    seed: int,
+    *,
+    ckpt: str = "best",
+):
+    """Load PPO checkpoint params.
 
+    ckpt:
+      - "best": prefer seed*/best/params.pkl, fall back to seed*/ppo_agent/params.pkl
+      - "final": prefer seed*/ppo_agent/params.pkl, fall back to seed*/best/params.pkl
 
-def _dense0_in_dim(variables: dict) -> int:
-    """Return Dense_0 input dim for ActorCriticCNN variables dict.
-
-    Accepts either a Flax variables dict (with top-level 'params') or an
-    already-unwrapped params dict.
+    The fallback makes the flag robust to older run dirs that may only have one
+    of the two.
     """
-    tree = variables
-    if isinstance(variables, dict) and "params" in variables and isinstance(variables["params"], dict):
-        tree = variables["params"]
-    kernel = tree["Dense_0"]["kernel"]
-    return int(kernel.shape[0])
-
-
-def _expected_dense0_in_dim_for_terrain(terrain) -> int:
-    """Compute expected Dense_0 input dim by initializing the model on this terrain's obs shape."""
-    rng = jax.random.PRNGKey(0)
-    bstate = make_batched_state(terrain, 1, rng, randomize_agent_idx=False)
-    obs0, _obs1 = encode_obs(terrain, bstate)
-    variables = ActorCriticCNN().init(jax.random.PRNGKey(0), obs0)
-    return _dense0_in_dim(variables)
-
-
-def _check_ppo_params_for_terrain(terrain, params: dict, run_name: str = "") -> None:
-    """Raise if loaded PPO params were trained with a different layout (CNN input shape mismatch)."""
-    try:
-        expected = _expected_dense0_in_dim_for_terrain(terrain)
-    except Exception as e:
-        raise ValueError(
-            f"Could not compute expected PPO Dense_0 input dim for current terrain. "
-            f"Run={run_name}. Error: {type(e).__name__}: {e}"
-        ) from e
-
-    try:
-        actual = _dense0_in_dim(params)
-    except Exception as e:
-        raise ValueError(
-            f"PPO params have unexpected structure (missing Dense_0/kernel). "
-            f"Run={run_name}. "
-            f"Top-level keys={list(params.keys()) if hasattr(params, 'keys') else type(params)}. "
-            f"Error: {type(e).__name__}: {e}"
-        ) from e
-
-    if actual != expected:
-        raise ValueError(
-            f"PPO checkpoint was trained with a different layout (or different obs encoding): "
-            f"Dense_0 input size is {actual} but current layout needs {expected}. "
-            f"Run={run_name}. Ensure OVERCOOKED_LAYOUT_DIR and obs encoding match training, "
-            f"and that you are loading the run for this layout."
-        )
-
-
-def _load_ppo_params(ppo_runs_dir: Path, run_name: str, seed: int) -> dict:
     seed_dir = ppo_runs_dir / run_name / f"seed{seed}"
     best_dir = seed_dir / "best"
     final_dir = seed_dir / "ppo_agent"
 
-    if (best_dir / "params.pkl").exists():
-        return load_ppo_checkpoint(best_dir)
-    if (final_dir / "params.pkl").exists():
-        return load_ppo_checkpoint(final_dir)
+    def _try(dir_: Path):
+        p = dir_ / "params.pkl"
+        if not p.exists():
+            return None
+        with p.open("rb") as f:
+            payload = pickle.load(f)
+        return payload.get("params", payload) if isinstance(payload, dict) else payload
+
+    if ckpt not in ("best", "final"):
+        raise ValueError(f"Invalid ckpt='{ckpt}'. Expected 'best' or 'final'.")
+
+    if ckpt == "best":
+        out = _try(best_dir)
+        if out is not None:
+            return out
+        out = _try(final_dir)
+        if out is not None:
+            return out
+    else:
+        out = _try(final_dir)
+        if out is not None:
+            return out
+        out = _try(best_dir)
+        if out is not None:
+            return out
+
     raise FileNotFoundError(
-        f"Could not find PPO params.pkl for run={run_name} seed={seed}. "
-        f"Tried: {best_dir}/params.pkl and {final_dir}/params.pkl"
+        f"Could not find PPO params for {run_name}/seed{seed} with ckpt='{ckpt}'. "
+        f"Looked for {best_dir/'params.pkl'} and {final_dir/'params.pkl'}."
     )
 
 
-def _bc_logits(params: dict, terrain, states, which_player: int) -> jnp.ndarray:
-    f0, f1 = jax.vmap(lambda s: featurize_state_64(terrain, s))(states)
-    feats = f0 if which_player == 0 else f1
-    logits = BCPolicy().apply(params, feats)
-    return _maybe_logits(logits)
-
-
-def _ppo_logits(params: dict, obs: jnp.ndarray) -> jnp.ndarray:
-    out = ActorCriticCNN().apply(params, obs)
-    return _maybe_logits(out)
+def load_first_existing(
+    ppo_runs_dir: Path,
+    run_names: Tuple[str, ...],
+    seed: int,
+    *,
+    ckpt: str,
+):
+    for name in run_names:
+        try:
+            return _load_ppo_params(ppo_runs_dir, name, seed, ckpt=ckpt)
+        except FileNotFoundError:
+            continue
+    raise FileNotFoundError(
+        f"None of the PPO run names exist for seed={seed}: {run_names}"
+    )
 
 
 def _eval_pair(
     terrain,
-    a0_kind: str,
-    a0_params: dict,
-    a1_kind: str,
-    a1_params: dict,
+    ppo_policy_fn: Callable,
+    partner_policy_fn: Callable,
     *,
-    num_games: int,
-    rng_key: jax.Array,
-) -> float:
-    """Evaluate mean cumulative sparse reward over HORIZON steps.
+    rng: jax.Array,
+    num_envs: int,
+    horizon: int,
+    n_episodes: int,
+    player_order_actions: bool,
+):
+    """Evaluate PPO (training agent) paired with a partner policy.
 
-    BC/HProxy use the paper's unstuck rule (same as PPO-BC training): when the
-    agent has been stuck in the same position for BC_STUCK_TIME+1 steps, mask
-    recently-taken actions and renormalize before sampling.
-
-    IMPORTANT: jax.random.categorical expects logits, not probabilities.
+    Returns mean sparse reward over n_episodes.
     """
-
-    rng_key, reset_rng = jax.random.split(rng_key)
-    bstate = make_batched_state(terrain, num_games, reset_rng, randomize_agent_idx=False)
+    rng, env_rng = jax.random.split(rng)
+    bstate = make_batched_state(terrain, num_envs, env_rng, randomize_agent_idx=False)
     obs0, obs1 = encode_obs(terrain, bstate)
 
-    # BC unstuck state (position/action history) for each player when they are BC
-    ph0, ah0, hl0, _ = _init_bc_partner_state(num_games)
-    ph1, ah1, hl1, _ = _init_bc_partner_state(num_games)
+    ep_returns = []
+    ep_done = np.zeros((num_envs,), dtype=np.int32)
+    ep_ret = np.zeros((num_envs,), dtype=np.float32)
 
-    shaping = jnp.array(0.0, dtype=jnp.float32)
+    rng, step_rng = jax.random.split(rng)
+    keys = jax.random.split(step_rng, horizon)
 
-    def step_fn(carry, _t):
-        (bstate, obs0, obs1, rng, pos_hist0, act_hist0, hist_len0, pos_hist1, act_hist1, hist_len1) = carry
-        rng, k0, k1, kresets = jax.random.split(rng, 4)
-        reset_keys = jax.random.split(kresets, num_games)
+    for t in range(horizon):
+        k = keys[t]
+        k0, k1, kres = jax.random.split(k, 3)
 
-        # Reset BC history at episode boundaries (match training runner)
-        reset_ep = (bstate.states.timestep == 0)
-        zeros_pos = jnp.zeros_like(pos_hist0)
-        zeros_act = jnp.zeros_like(act_hist0)
-        pos_hist0 = jnp.where(reset_ep[:, None, None], zeros_pos, pos_hist0)
-        act_hist0 = jnp.where(reset_ep[:, None], zeros_act, act_hist0)
-        hist_len0 = jnp.where(reset_ep, jnp.zeros_like(hist_len0), hist_len0)
-        pos_hist1 = jnp.where(reset_ep[:, None, None], zeros_pos, pos_hist1)
-        act_hist1 = jnp.where(reset_ep[:, None], zeros_act, act_hist1)
-        hist_len1 = jnp.where(reset_ep, jnp.zeros_like(hist_len1), hist_len1)
+        # PPO acts as training agent (obs0), partner acts on obs1.
+        a0 = ppo_policy_fn(obs0, k0)
+        a1 = partner_policy_fn(obs1, k1)
 
-        # Agent 0
-        if a0_kind == "ppo":
-            logits0 = _ppo_logits(a0_params, obs0)
-            act0 = jax.random.categorical(k0, logits0)
-        else:
-            logits0 = _bc_logits(a0_params, terrain, bstate.states, which_player=0)
-            probs0 = jax.nn.softmax(logits0, axis=-1)
-            probs0 = _unstuck_adjust_probs(
-                probs0, pos_hist0, act_hist0, hist_len0, stuck_time=BC_STUCK_TIME
-            )
-            act0 = jax.random.categorical(k0, jnp.log(probs0 + 1e-20))
-            pos_xy0 = bstate.states.player_pos[:, 0, :]
-            pos_hist0, act_hist0, hist_len0 = _push_history(
-                pos_hist0, act_hist0, hist_len0,
-                pos_xy=pos_xy0, act=act0, update_mask=jnp.ones(num_games, dtype=jnp.bool_),
-            )
+        reset_keys = jax.random.split(kres, num_envs)
 
-        # Agent 1
-        if a1_kind == "ppo":
-            logits1 = _ppo_logits(a1_params, obs1)
-            act1 = jax.random.categorical(k1, logits1)
-        else:
-            logits1 = _bc_logits(a1_params, terrain, bstate.states, which_player=1)
-            probs1 = jax.nn.softmax(logits1, axis=-1)
-            probs1 = _unstuck_adjust_probs(
-                probs1, pos_hist1, act_hist1, hist_len1, stuck_time=BC_STUCK_TIME
-            )
-            act1 = jax.random.categorical(k1, jnp.log(probs1 + 1e-20))
-            pos_xy1 = bstate.states.player_pos[:, 1, :]
-            pos_hist1, act_hist1, hist_len1 = _push_history(
-                pos_hist1, act_hist1, hist_len1,
-                pos_xy=pos_xy1, act=act1, update_mask=jnp.ones(num_games, dtype=jnp.bool_),
-            )
-
-        act0 = act0.astype(jnp.int32)
-        act1 = act1.astype(jnp.int32)
-
-        bstate, obs0, obs1, _rewards, _dones, sparse_r = batched_step(
+        bstate, obs0, obs1, rewards, dones, sparse_r = batched_step(
             terrain,
             bstate,
-            act0,
-            act1,
+            a0,
+            a1,
             reset_keys,
-            shaping,
-            HORIZON,
-            player_order_actions=True,
+            shaping_factor=jnp.asarray(0.0, dtype=jnp.float32),
+            horizon=horizon,
+            player_order_actions=player_order_actions,
             randomize_agent_idx=False,
         )
-        new_carry = (bstate, obs0, obs1, rng, pos_hist0, act_hist0, hist_len0, pos_hist1, act_hist1, hist_len1)
-        return new_carry, sparse_r
 
-    init_carry = (bstate, obs0, obs1, rng_key, ph0, ah0, hl0, ph1, ah1, hl1)
-    (_bstate, _obs0, _obs1, _rng, _ph0, _ah0, _hl0, _ph1, _ah1, _hl1), sparse_traj = jax.lax.scan(
-        step_fn, init_carry, xs=None, length=HORIZON
+        sparse_r_np = np.asarray(sparse_r)
+        done_np = np.asarray(dones).astype(np.int32)
+
+        ep_ret += sparse_r_np
+        just_done = (done_np == 1) & (ep_done == 0)
+        if np.any(just_done):
+            ep_returns.extend(ep_ret[just_done].tolist())
+            ep_done[just_done] = 1
+        if len(ep_returns) >= n_episodes:
+            break
+
+    if not ep_returns:
+        return 0.0
+    return float(np.mean(ep_returns[:n_episodes]))
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--layout", required=True)
+    parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--num_envs", type=int, default=30)
+    parser.add_argument("--n_episodes", type=int, default=200)
+    parser.add_argument("--ppo_runs_dir", type=str, default="data/ppo_runs")
+    parser.add_argument("--best_bc_paths", type=str, default="data/bc_runs/best_bc_model_paths.pkl")
+    parser.add_argument(
+        "--ckpt",
+        type=str,
+        default="best",
+        choices=["best", "final"],
+        help="Which PPO checkpoint to evaluate: 'best' (default) or 'final' (ppo_agent).",
     )
-
-    returns = jnp.sum(sparse_traj, axis=0)
-    return float(jnp.mean(returns))
-
-
-def _try_run_names(prefixes: List[str], layout: str) -> List[str]:
-    return [p.format(layout=layout) for p in prefixes]
-
-
-def main() -> None:
-    ap = argparse.ArgumentParser(description="Evaluate Figure 4a for one layout (JAX-native).")
-    ap.add_argument("--layout", required=True, choices=sorted(LAYOUT_KEY.keys()))
-    ap.add_argument("--num_games", type=int, default=100)
-    ap.add_argument("--ppo_runs_dir", type=str, default="data/ppo_runs")
-    ap.add_argument("--bc_paths_file", type=str, default="data/bc_runs/best_bc_model_paths.pkl")
-    ap.add_argument("--out_dir", type=str, default="eval_results")
-    args = ap.parse_args()
+    args = parser.parse_args()
 
     layout = args.layout
-    fig_key = LAYOUT_KEY[layout]
-
-    ppo_runs_dir = Path(args.ppo_runs_dir)
-    best_bc_paths = load_best_bc_model_paths(Path(args.bc_paths_file))
-
-    bc_train = _load_bc_params(best_bc_paths, layout, "train")
-    hproxy = _load_bc_params(best_bc_paths, layout, "test")
+    seed = int(args.seed)
+    horizon = 400
 
     terrain = parse_layout(layout)
 
-    out: Dict[str, object] = {
-        "SP_SP": {},
-        "SP_HProxy": {},
-        "PPOBC_HProxy": {},
-        "BC_HProxy": {},
-        "SP_HProxy_sw": {},
-        "PPOBC_HProxy_sw": {},
-        "BC_HProxy_sw": {},
-        "gold_standard": None,
-    }
+    best_paths_file = Path(args.best_bc_paths)
+    bc_train_params = _load_bc_params(best_paths_file, "train", layout)
+    hproxy_params = _load_bc_params(best_paths_file, "test", layout)
 
-    sp_run_candidates = _try_run_names([
-        "ppo_sp_{layout}",
-        "ppo_sp_jax_{layout}",
-    ], layout)
+    # PPO checkpoints (you may have multiple run-name conventions)
+    ppo_runs_dir = Path(args.ppo_runs_dir)
+    ppo_bc_test_params = load_first_existing(
+        ppo_runs_dir,
+        (f"ppo_bc_test_{layout}", f"ppo_bc_{layout}", f"ppo_bc_test_{layout}_v0"),
+        seed,
+        ckpt=args.ckpt,
+    )
 
-    bc_train_run_candidates = _try_run_names([
-        "ppo_bc_train_{layout}",
-        "ppo_bc_train_jax_{layout}",
-    ], layout)
+    ppo_policy = make_ppo_policy(ppo_bc_test_params)
+    bc_train_policy = make_bc_policy(bc_train_params)
+    hproxy_policy = make_bc_policy(hproxy_params)
 
-    bc_test_run_candidates = _try_run_names([
-        "ppo_bc_test_{layout}",
-        "ppo_bc_test_jax_{layout}",
-    ], layout)
-
-    def load_first_existing(run_names: List[str], seed: int) -> Tuple[str, dict]:
-        last_err = None
-        for rn in run_names:
-            try:
-                return rn, _load_ppo_params(ppo_runs_dir, rn, seed)
-            except FileNotFoundError as e:
-                last_err = e
-                continue
-        raise last_err if last_err is not None else FileNotFoundError("No run names provided")
-
-    # PPO-SP
-    for i, seed in enumerate(PPO_SP_SEEDS):
-        rn, params = load_first_existing(sp_run_candidates, seed)
-        _check_ppo_params_for_terrain(terrain, params, run_name=rn)
-        rng = jax.random.PRNGKey(int(seed))
-        out["SP_SP"][i] = _eval_pair(terrain, "ppo", params, "ppo", params, num_games=args.num_games, rng_key=rng)
-        out["SP_HProxy"][i] = _eval_pair(terrain, "ppo", params, "bc", hproxy, num_games=args.num_games, rng_key=rng)
-        out["SP_HProxy_sw"][i] = _eval_pair(terrain, "bc", hproxy, "ppo", params, num_games=args.num_games, rng_key=rng)
-        print(f"[{layout}] SP run={rn} seed={seed} -> done")
-
-    # PPO-BC-train (trained with BC_train; evaluated w/ HProxy)
-    for i, seed in enumerate(PPO_BC_TRAIN_SEEDS):
-        rn, params = load_first_existing(bc_train_run_candidates, seed)
-        _check_ppo_params_for_terrain(terrain, params, run_name=rn)
-        rng = jax.random.PRNGKey(int(seed))
-        out["PPOBC_HProxy"][i] = _eval_pair(terrain, "ppo", params, "bc", hproxy, num_games=args.num_games, rng_key=rng)
-        out["PPOBC_HProxy_sw"][i] = _eval_pair(terrain, "bc", hproxy, "ppo", params, num_games=args.num_games, rng_key=rng)
-        print(f"[{layout}] PPOBC-train run={rn} seed={seed} -> done")
-
-    # BC baseline (BC_train vs HProxy) — run once and replicate
     rng = jax.random.PRNGKey(0)
-    bc_mean = _eval_pair(terrain, "bc", bc_train, "bc", hproxy, num_games=args.num_games, rng_key=rng)
-    bc_mean_sw = _eval_pair(terrain, "bc", hproxy, "bc", bc_train, num_games=args.num_games, rng_key=rng)
-    for i in range(5):
-        out["BC_HProxy"][i] = bc_mean
-        out["BC_HProxy_sw"][i] = bc_mean_sw
 
-    # Gold standard: PPO trained with HProxy itself (bc_test)
-    gold_vals: List[float] = []
-    for seed in PPO_BC_TEST_SEEDS:
-        rn, params = load_first_existing(bc_test_run_candidates, seed)
-        _check_ppo_params_for_terrain(terrain, params, run_name=rn)
-        rng = jax.random.PRNGKey(int(seed))
-        v0 = _eval_pair(terrain, "ppo", params, "bc", hproxy, num_games=args.num_games, rng_key=rng)
-        v1 = _eval_pair(terrain, "bc", hproxy, "ppo", params, num_games=args.num_games, rng_key=rng)
-        gold_vals.append(0.5 * (v0 + v1))
-        print(f"[{layout}] gold run={rn} seed={seed} -> done")
-    out["gold_standard"] = float(sum(gold_vals) / len(gold_vals))
+    # NOTE: player_order_actions controls whether (a0,a1) are interpreted as (p0,p1)
+    # or (agent_idx, other). For this evaluator we want agent_idx ordering.
+    player_order_actions = False
 
-    Path(args.out_dir).mkdir(parents=True, exist_ok=True)
-    out_path = Path(args.out_dir) / f"results_{layout}.json"
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump({fig_key: out}, f, indent=2)
-    print(f"Wrote {out_path}")
+    # Gold standard: average over PPO as P0 and PPO as P1 (role swap)
+    v0 = _eval_pair(
+        terrain,
+        ppo_policy,
+        hproxy_policy,
+        rng=rng,
+        num_envs=args.num_envs,
+        horizon=horizon,
+        n_episodes=args.n_episodes,
+        player_order_actions=player_order_actions,
+    )
+    v1 = _eval_pair(
+        terrain,
+        hproxy_policy,
+        ppo_policy,
+        rng=rng,
+        num_envs=args.num_envs,
+        horizon=horizon,
+        n_episodes=args.n_episodes,
+        player_order_actions=player_order_actions,
+    )
+
+    # Additional baselines
+    v_bc = _eval_pair(
+        terrain,
+        ppo_policy,
+        bc_train_policy,
+        rng=rng,
+        num_envs=args.num_envs,
+        horizon=horizon,
+        n_episodes=args.n_episodes,
+        player_order_actions=player_order_actions,
+    )
+
+    out = {
+        "layout": layout,
+        "seed": seed,
+        "ckpt": args.ckpt,
+        "gold_standard_mean": 0.5 * (v0 + v1),
+        "gold_standard_v0": v0,
+        "gold_standard_v1": v1,
+        "ppo_plus_bc_train": v_bc,
+    }
+    print(out)
 
 
 if __name__ == "__main__":
