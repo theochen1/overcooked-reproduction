@@ -53,6 +53,8 @@ print('GPU check passed.')
 mkdir -p "$SLURM_SUBMIT_DIR/../logs"
 cd "$SLURM_SUBMIT_DIR/.."
 
+export OVERCOOKED_LAYOUT_DIR="$(pwd)/../human_aware_rl/overcooked_ai/overcooked_ai_py/data/layouts"
+
 python -u scripts/train_ppo_sp.py \
     --layout   "$LAYOUT" \
     --seeds    "${PPO_SP_SEEDS[@]}" \

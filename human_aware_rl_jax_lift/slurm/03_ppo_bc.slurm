@@ -63,6 +63,8 @@ if [ ! -f "$BC_PATHS_FILE" ]; then
     echo "ERROR: $BC_PATHS_FILE missing — BC stage must complete first" && exit 1
 fi
 
+export OVERCOOKED_LAYOUT_DIR="$(pwd)/../human_aware_rl/overcooked_ai/overcooked_ai_py/data/layouts"
+
 python -u scripts/train_ppo_bc.py \
     --layout        "$LAYOUT" \
     --bc_split      "$SPLIT" \
