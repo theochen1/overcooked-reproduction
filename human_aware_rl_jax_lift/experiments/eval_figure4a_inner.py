@@ -180,6 +180,8 @@ def _eval_pair(
     BC/HProxy use the paper's unstuck rule (same as PPO-BC training): when the
     agent has been stuck in the same position for BC_STUCK_TIME+1 steps, mask
     recently-taken actions and renormalize before sampling.
+
+    IMPORTANT: jax.random.categorical expects logits, not probabilities.
     """
 
     rng_key, reset_rng = jax.random.split(rng_key)
@@ -218,7 +220,7 @@ def _eval_pair(
             probs0 = _unstuck_adjust_probs(
                 probs0, pos_hist0, act_hist0, hist_len0, stuck_time=BC_STUCK_TIME
             )
-            act0 = jax.random.categorical(k0, probs0)
+            act0 = jax.random.categorical(k0, jnp.log(probs0 + 1e-20))
             pos_xy0 = bstate.states.player_pos[:, 0, :]
             pos_hist0, act_hist0, hist_len0 = _push_history(
                 pos_hist0, act_hist0, hist_len0,
@@ -235,7 +237,7 @@ def _eval_pair(
             probs1 = _unstuck_adjust_probs(
                 probs1, pos_hist1, act_hist1, hist_len1, stuck_time=BC_STUCK_TIME
             )
-            act1 = jax.random.categorical(k1, probs1)
+            act1 = jax.random.categorical(k1, jnp.log(probs1 + 1e-20))
             pos_xy1 = bstate.states.player_pos[:, 1, :]
             pos_hist1, act_hist1, hist_len1 = _push_history(
                 pos_hist1, act_hist1, hist_len1,
