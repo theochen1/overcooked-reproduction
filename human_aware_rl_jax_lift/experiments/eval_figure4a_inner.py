@@ -1,27 +1,29 @@
 """Figure 4A evaluation (inner loop).
 
-This script evaluates a trained PPO policy against BC (train split) and a
-held-out human proxy (BC test split / HProxy) in the paper's Figure 4A setup.
+This script evaluates a trained PPO policy paired with:
+- BC(train) (paper's "BC" partner)
+- BC(test) (paper's held-out human proxy / HProxy)
 
-Patch note (2026-03):
-- Add --ckpt flag to force using either the best-checkpoint or final checkpoint
-  for PPO runs. This helps diagnose cases where "best" was selected during
-  training under self-play mixing but evaluation assumes a fixed partner.
+Patch notes (2026-03):
+- Add --ckpt flag to choose PPO checkpoint: best/ vs ppo_agent/.
+- Fix imports to match this repo (no agents.bc.policy / agents.ppo.policy).
+- Evaluate role-swap by forcing bstate.agent_idx to 0 vs 1 (PPO as P0 vs P1)
+  rather than swapping policy-call order.
 """
 
 import argparse
 import pickle
 from pathlib import Path
-from typing import Callable, Dict, Tuple
+from typing import Callable, Tuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
+from human_aware_rl_jax_lift.agents.ppo.model import ActorCriticCNN
 from human_aware_rl_jax_lift.env.layouts import parse_layout
+from human_aware_rl_jax_lift.training.partners import BCPartner
 from human_aware_rl_jax_lift.training.vec_env import batched_step, encode_obs, make_batched_state
-from human_aware_rl_jax_lift.agents.bc.policy import make_bc_policy
-from human_aware_rl_jax_lift.agents.ppo.policy import make_ppo_policy
 
 
 def _load_bc_params(best_paths_file: Path, split: str, layout_name: str):
@@ -99,48 +101,67 @@ def load_first_existing(
             return _load_ppo_params(ppo_runs_dir, name, seed, ckpt=ckpt)
         except FileNotFoundError:
             continue
-    raise FileNotFoundError(
-        f"None of the PPO run names exist for seed={seed}: {run_names}"
-    )
+    raise FileNotFoundError(f"None of the PPO run names exist for seed={seed}: {run_names}")
+
+
+def make_ppo_policy(params, *, stochastic: bool = True) -> Callable:
+    model = ActorCriticCNN(num_actions=6, num_filters=25, hidden_dim=32)
+    apply_fn = jax.jit(model.apply)
+
+    def act(obs_batch, rng: jax.Array):
+        logits, _ = apply_fn(params, jnp.asarray(obs_batch, dtype=jnp.float32))
+        if stochastic:
+            a = jax.random.categorical(rng, logits, axis=-1)
+        else:
+            a = jnp.argmax(logits, axis=-1)
+        return np.asarray(a, dtype=np.int32)
+
+    return act
 
 
 def _eval_pair(
     terrain,
     ppo_policy_fn: Callable,
-    partner_policy_fn: Callable,
+    partner: BCPartner,
     *,
     rng: jax.Array,
     num_envs: int,
     horizon: int,
     n_episodes: int,
-    player_order_actions: bool,
+    ppo_agent_idx: int,
 ):
-    """Evaluate PPO (training agent) paired with a partner policy.
+    """Evaluate PPO paired with a fixed BC partner; return mean sparse reward.
 
-    Returns mean sparse reward over n_episodes.
+    PPO is always treated as the "training agent" (obs0). The role swap is
+    implemented by forcing bstate.agent_idx to 0 (PPO as P0) or 1 (PPO as P1).
     """
     rng, env_rng = jax.random.split(rng)
     bstate = make_batched_state(terrain, num_envs, env_rng, randomize_agent_idx=False)
+    bstate = bstate.replace(agent_idx=jnp.full((num_envs,), int(ppo_agent_idx), dtype=jnp.int32))
     obs0, obs1 = encode_obs(terrain, bstate)
 
     ep_returns = []
-    ep_done = np.zeros((num_envs,), dtype=np.int32)
     ep_ret = np.zeros((num_envs,), dtype=np.float32)
 
-    rng, step_rng = jax.random.split(rng)
-    keys = jax.random.split(step_rng, horizon)
+    n_blocks = int(np.ceil(float(n_episodes) / float(num_envs)))
+    max_steps = horizon * max(1, n_blocks)
 
-    for t in range(horizon):
-        k = keys[t]
-        k0, k1, kres = jax.random.split(k, 3)
+    # In this evaluator we want (training_action, other_action) semantics.
+    player_order_actions = False
 
-        # PPO acts as training agent (obs0), partner acts on obs1.
+    for _ in range(max_steps):
+        rng, k0, k1, kres = jax.random.split(rng, 4)
+
         a0 = ppo_policy_fn(obs0, k0)
-        a1 = partner_policy_fn(obs1, k1)
+        a1 = partner.act(
+            np.asarray(obs1),
+            k1,
+            states=bstate.states,
+            agent_idx=np.asarray(bstate.agent_idx),
+        )
 
         reset_keys = jax.random.split(kres, num_envs)
-
-        bstate, obs0, obs1, rewards, dones, sparse_r = batched_step(
+        bstate, obs0, obs1, _rewards, dones, sparse_r = batched_step(
             terrain,
             bstate,
             a0,
@@ -152,16 +173,13 @@ def _eval_pair(
             randomize_agent_idx=False,
         )
 
-        sparse_r_np = np.asarray(sparse_r)
-        done_np = np.asarray(dones).astype(np.int32)
-
-        ep_ret += sparse_r_np
-        just_done = (done_np == 1) & (ep_done == 0)
-        if np.any(just_done):
-            ep_returns.extend(ep_ret[just_done].tolist())
-            ep_done[just_done] = 1
-        if len(ep_returns) >= n_episodes:
-            break
+        ep_ret += np.asarray(sparse_r, dtype=np.float32)
+        done_mask = np.asarray(dones, dtype=np.float32) > 0.5
+        if np.any(done_mask):
+            ep_returns.extend(ep_ret[done_mask].tolist())
+            ep_ret[done_mask] = 0.0
+            if len(ep_returns) >= n_episodes:
+                break
 
     if not ep_returns:
         return 0.0
@@ -195,57 +213,50 @@ def main():
     bc_train_params = _load_bc_params(best_paths_file, "train", layout)
     hproxy_params = _load_bc_params(best_paths_file, "test", layout)
 
-    # PPO checkpoints (you may have multiple run-name conventions)
     ppo_runs_dir = Path(args.ppo_runs_dir)
-    ppo_bc_test_params = load_first_existing(
+    ppo_params = load_first_existing(
         ppo_runs_dir,
         (f"ppo_bc_test_{layout}", f"ppo_bc_{layout}", f"ppo_bc_test_{layout}_v0"),
         seed,
         ckpt=args.ckpt,
     )
 
-    ppo_policy = make_ppo_policy(ppo_bc_test_params)
-    bc_train_policy = make_bc_policy(bc_train_params)
-    hproxy_policy = make_bc_policy(hproxy_params)
+    ppo_policy = make_ppo_policy(ppo_params, stochastic=True)
+    bc_train_partner = BCPartner(params=bc_train_params, terrain=terrain, stochastic=True)
+    hproxy_partner = BCPartner(params=hproxy_params, terrain=terrain, stochastic=True)
 
     rng = jax.random.PRNGKey(0)
 
-    # NOTE: player_order_actions controls whether (a0,a1) are interpreted as (p0,p1)
-    # or (agent_idx, other). For this evaluator we want agent_idx ordering.
-    player_order_actions = False
-
-    # Gold standard: average over PPO as P0 and PPO as P1 (role swap)
     v0 = _eval_pair(
         terrain,
         ppo_policy,
-        hproxy_policy,
+        hproxy_partner,
         rng=rng,
         num_envs=args.num_envs,
         horizon=horizon,
         n_episodes=args.n_episodes,
-        player_order_actions=player_order_actions,
+        ppo_agent_idx=0,
     )
     v1 = _eval_pair(
         terrain,
-        hproxy_policy,
         ppo_policy,
+        hproxy_partner,
         rng=rng,
         num_envs=args.num_envs,
         horizon=horizon,
         n_episodes=args.n_episodes,
-        player_order_actions=player_order_actions,
+        ppo_agent_idx=1,
     )
 
-    # Additional baselines
     v_bc = _eval_pair(
         terrain,
         ppo_policy,
-        bc_train_policy,
+        bc_train_partner,
         rng=rng,
         num_envs=args.num_envs,
         horizon=horizon,
         n_episodes=args.n_episodes,
-        player_order_actions=player_order_actions,
+        ppo_agent_idx=0,
     )
 
     out = {
