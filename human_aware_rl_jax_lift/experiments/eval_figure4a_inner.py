@@ -14,6 +14,7 @@ Patch notes (2026-03):
 - --seed is now optional; if omitted, we auto-discover seed*/ directories.
 - Accept legacy flag aliases: --num_games, --bc_paths_file, --out_dir.
 - Add optional JSON output to --out_dir.
+- Define a local `shaping` alias (0.0) for robustness against older edits.
 """
 
 import argparse
@@ -156,6 +157,9 @@ def _eval_pair(
 
     player_order_actions = False
 
+    # Sparse-only evaluation: shaping is always 0.0
+    shaping = jnp.asarray(0.0, dtype=jnp.float32)
+
     for _ in range(max_steps):
         rng, k0, k1, kres = jax.random.split(rng, 4)
 
@@ -174,7 +178,7 @@ def _eval_pair(
             a0,
             a1,
             reset_keys,
-            shaping_factor=jnp.asarray(0.0, dtype=jnp.float32),
+            shaping_factor=shaping,
             horizon=horizon,
             player_order_actions=player_order_actions,
             randomize_agent_idx=False,
@@ -197,7 +201,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--layout", required=True)
 
-    # seed is optional for SLURM compatibility
     parser.add_argument(
         "--seed",
         type=int,
@@ -207,7 +210,6 @@ def main():
 
     parser.add_argument("--num_envs", type=int, default=30)
 
-    # Accept legacy alias --num_games
     parser.add_argument(
         "--n_episodes",
         "--num_games",
@@ -219,7 +221,6 @@ def main():
 
     parser.add_argument("--ppo_runs_dir", type=str, default="data/ppo_runs")
 
-    # Accept legacy alias --bc_paths_file
     parser.add_argument(
         "--best_bc_paths",
         "--bc_paths_file",
@@ -229,7 +230,6 @@ def main():
         help="Pickle file mapping layout -> BC model path for train/test splits.",
     )
 
-    # Accept legacy --out_dir (optional)
     parser.add_argument(
         "--out_dir",
         type=str,
@@ -276,7 +276,9 @@ def main():
             except FileNotFoundError:
                 continue
         if ppo_params is None:
-            raise FileNotFoundError(f"Could not load PPO checkpoint for layout={layout} seed={seed} in {ppo_runs_dir}")
+            raise FileNotFoundError(
+                f"Could not load PPO checkpoint for layout={layout} seed={seed} in {ppo_runs_dir}"
+            )
 
         ppo_policy = make_ppo_policy(ppo_params, stochastic=True)
         rng = jax.random.PRNGKey(0)
