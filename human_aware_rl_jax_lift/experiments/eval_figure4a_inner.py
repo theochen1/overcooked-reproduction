@@ -31,7 +31,8 @@ Notes
 - Evaluation uses sparse reward only (shaping = 0.0) and horizon = 400.
 - Policies are evaluated stochastically.
 - Different PPO runs may have different raw seed folder names (e.g., seed184 vs seed386).
-  To avoid spurious failures, we discover seeds per *run group* (SP vs PPOBC vs gold).
+  To avoid spurious failures, we discover seeds per *run group* (SP vs PPOBC vs gold)
+  and filter to seeds that actually contain a checkpoint file.
 """
 
 import argparse
@@ -43,6 +44,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 # Ensure repo root is on sys.path even when launched from human_aware_rl_jax_lift/
 _THIS = Path(__file__).resolve()
+_PKG_ROOT = _THIS.parents[1]  # .../human_aware_rl_jax_lift
 _REPO_ROOT = _THIS.parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -130,17 +132,28 @@ def _first_existing_run_dir(ppo_runs_dir: Path, run_names: Tuple[str, ...]) -> P
     raise FileNotFoundError(f"None of these PPO run dirs exist under {ppo_runs_dir}: {run_names}")
 
 
+def _seed_has_any_ckpt(seed_dir: Path) -> bool:
+    return (seed_dir / "best" / "params.pkl").exists() or (seed_dir / "ppo_agent" / "params.pkl").exists()
+
+
 def _discover_seeds(run_dir: Path) -> List[int]:
     seeds: List[int] = []
     for p in run_dir.glob("seed*"):
         if not p.is_dir():
             continue
         s = p.name.replace("seed", "")
-        if s.isdigit():
-            seeds.append(int(s))
+        if not s.isdigit():
+            continue
+        if not _seed_has_any_ckpt(p):
+            continue
+        seeds.append(int(s))
+
     seeds.sort()
     if not seeds:
-        raise FileNotFoundError(f"No seed*/ directories found under {run_dir}")
+        raise FileNotFoundError(
+            f"No seed*/ directories with a checkpoint found under {run_dir}. "
+            f"Expected either best/params.pkl or ppo_agent/params.pkl inside each seed dir."
+        )
     return seeds
 
 
@@ -159,8 +172,8 @@ def _seeds_for_group(
     discovered = _discover_seeds(run_dir)
     if len(discovered) < int(num_seeds):
         raise FileNotFoundError(
-            f"Not enough seeds for group '{group_name}'. Found {len(discovered)} under {run_dir}, "
-            f"need {num_seeds}."
+            f"Not enough usable seeds for group '{group_name}'. Found {len(discovered)} under {run_dir}, "
+            f"need {num_seeds}. Usable seeds are: {discovered}"
         )
     return discovered[: int(num_seeds)]
 
@@ -272,6 +285,8 @@ def _load_first_available(
 
 
 def main() -> None:
+    default_data_dir = _PKG_ROOT / "data"
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--layout", required=True)
 
@@ -300,14 +315,14 @@ def main() -> None:
         help="How many seeds to include when auto-discovering (default: 5).",
     )
 
-    parser.add_argument("--ppo_runs_dir", type=str, default="data/ppo_runs")
+    parser.add_argument("--ppo_runs_dir", type=str, default=str(default_data_dir / "ppo_runs"))
 
     parser.add_argument(
         "--best_bc_paths",
         "--bc_paths_file",
         dest="best_bc_paths",
         type=str,
-        default="data/bc_runs/best_bc_model_paths.pkl",
+        default=str(default_data_dir / "bc_runs" / "best_bc_model_paths.pkl"),
         help="Pickle file mapping layout -> BC model path for train/test splits.",
     )
 
