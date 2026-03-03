@@ -45,12 +45,18 @@ Evaluation notes
 - Evaluation uses sparse reward only (shaping = 0.0) and horizon = 400.
 - Policies are evaluated stochastically.
 - BC_test_0 vs BC_test_1 correspond to swapping player order in evaluation.
+
+Debugging / progress logs
+-------------------------
+This script emits timestamped progress logs (JSON-ish dicts) to help diagnose slow
+imports, XLA compilation, checkpoint loading, or rollout evaluation stalls.
 """
 
 import argparse
 import json
 import pickle
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -86,6 +92,25 @@ _PPO_BC_SEEDS = {
     "bc_train": [9456, 1887, 5578, 5987, 516],
     "bc_test": [2888, 7424, 7360, 4467, 184],
 }
+
+
+def _ts(t0: float) -> str:
+    return f"+{time.time() - t0:.1f}s"
+
+
+def _log(t0: float, msg: str, **kvs) -> None:
+    payload = {"t": _ts(t0), "msg": msg}
+    payload.update(kvs)
+    print(payload)
+    sys.stdout.flush()
+
+
+def _timeit(t0: float, label: str, fn: Callable[[], float], **kvs) -> float:
+    _log(t0, f"begin:{label}", **kvs)
+    t1 = time.time()
+    out = fn()
+    _log(t0, f"end:{label}", seconds=round(time.time() - t1, 3), value=float(out), **kvs)
+    return out
 
 
 def _load_bc_params(best_paths_file: Path, split: str, layout_name: str):
@@ -300,6 +325,9 @@ def _to_legacy(layout_key: str, raw_row: Dict[str, Dict[int, float]]) -> Dict[st
 
 
 def main() -> None:
+    t0 = time.time()
+    _log(t0, "start", argv=" ".join(sys.argv))
+
     default_data_dir = _PKG_ROOT / "data"
 
     parser = argparse.ArgumentParser()
@@ -367,6 +395,22 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    _log(
+        t0,
+        "parsed_args",
+        layout=args.layout,
+        n_episodes=int(args.n_episodes),
+        num_envs=int(args.num_envs),
+        num_seeds=int(args.num_seeds),
+        seed_override=args.seed,
+        sp_ckpt=args.sp_ckpt,
+        bc_ckpt=args.bc_ckpt,
+        ppo_runs_dir=args.ppo_runs_dir,
+        bc_paths_file=args.best_bc_paths,
+        out_dir=args.out_dir,
+        jax_devices=[str(d) for d in jax.devices()],
+    )
+
     layout = args.layout
     if layout not in _LAYOUT_KEY:
         raise KeyError(f"Unknown layout '{layout}'. Expected one of: {sorted(_LAYOUT_KEY.keys())}")
@@ -375,10 +419,14 @@ def main() -> None:
     horizon = 400
     n_seeds = int(args.num_seeds)
 
+    _log(t0, "parse_layout", layout=layout)
     terrain = parse_layout(layout)
+    _log(t0, "parsed_layout", layout=layout)
 
     best_paths_file = Path(args.best_bc_paths)
+    _log(t0, "load_bc_params", split="train", file=str(best_paths_file))
     bc_train_params = _load_bc_params(best_paths_file, "train", layout)
+    _log(t0, "load_bc_params", split="test", file=str(best_paths_file))
     bc_test_params = _load_bc_params(best_paths_file, "test", layout)
 
     bc_train_act = make_bc_act(bc_train_params, terrain, stochastic=True)
@@ -400,6 +448,8 @@ def main() -> None:
         bc_train_seeds = _ensure_seed_list(_PPO_BC_SEEDS["bc_train"], n_seeds, name="PPO_BC_train")
         bc_test_seeds = _ensure_seed_list(_PPO_BC_SEEDS["bc_test"], n_seeds, name="PPO_BC_test")
 
+    _log(t0, "seed_families", sp_seeds=sp_seeds, bc_train_seeds=bc_train_seeds, bc_test_seeds=bc_test_seeds)
+
     raw_row: Dict[str, Dict[int, float]] = {
         "PPO_SP+PPO_SP": {},
         "PPO_SP+BC_test_0": {},
@@ -414,60 +464,99 @@ def main() -> None:
 
     # BC baseline does not depend on PPO seeds; compute once and replicate.
     rng = jax.random.PRNGKey(0)
-    v_bc0 = _eval_joint(
-        terrain,
-        bc_train_act,
-        bc_test_act,
-        rng=rng,
-        num_envs=args.num_envs,
-        horizon=horizon,
-        n_episodes=args.n_episodes,
+    v_bc0 = _timeit(
+        t0,
+        "eval_bc_baseline_0",
+        lambda: _eval_joint(
+            terrain,
+            bc_train_act,
+            bc_test_act,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
+        ),
+        num_envs=int(args.num_envs),
+        n_episodes=int(args.n_episodes),
     )
-    v_bc1 = _eval_joint(
-        terrain,
-        bc_test_act,
-        bc_train_act,
-        rng=rng,
-        num_envs=args.num_envs,
-        horizon=horizon,
-        n_episodes=args.n_episodes,
+
+    rng = jax.random.PRNGKey(0)
+    v_bc1 = _timeit(
+        t0,
+        "eval_bc_baseline_1",
+        lambda: _eval_joint(
+            terrain,
+            bc_test_act,
+            bc_train_act,
+            rng=rng,
+            num_envs=args.num_envs,
+            horizon=horizon,
+            n_episodes=args.n_episodes,
+        ),
+        num_envs=int(args.num_envs),
+        n_episodes=int(args.n_episodes),
     )
+
     for seed_idx in range(len(sp_seeds) if args.seed is not None else n_seeds):
         raw_row["BC_train+BC_test_0"][seed_idx] = v_bc0
         raw_row["BC_train+BC_test_1"][seed_idx] = v_bc1
 
     # SP PPO
     for seed_idx, seed in enumerate(sp_seeds):
+        _log(t0, "load_sp_ckpt", seed=int(seed), seed_idx=int(seed_idx), ckpt=args.sp_ckpt)
         sp_name, sp_params = _load_first_available(ppo_runs_dir, ppo_sp_runs, seed=seed, ckpt=args.sp_ckpt)
+        _log(t0, "loaded_sp_ckpt", seed=int(seed), seed_idx=int(seed_idx), run_name=sp_name)
         sp_act = make_ppo_act(sp_params, stochastic=True)
 
         rng = jax.random.PRNGKey(0)
-        raw_row["PPO_SP+PPO_SP"][seed_idx] = _eval_joint(
-            terrain,
-            sp_act,
-            sp_act,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
+        raw_row["PPO_SP+PPO_SP"][seed_idx] = _timeit(
+            t0,
+            "eval:PPO_SP+PPO_SP",
+            lambda: _eval_joint(
+                terrain,
+                sp_act,
+                sp_act,
+                rng=rng,
+                num_envs=args.num_envs,
+                horizon=horizon,
+                n_episodes=args.n_episodes,
+            ),
+            seed=int(seed),
+            seed_idx=int(seed_idx),
         )
-        raw_row["PPO_SP+BC_test_0"][seed_idx] = _eval_joint(
-            terrain,
-            sp_act,
-            bc_test_act,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
+
+        rng = jax.random.PRNGKey(0)
+        raw_row["PPO_SP+BC_test_0"][seed_idx] = _timeit(
+            t0,
+            "eval:PPO_SP+BC_test_0",
+            lambda: _eval_joint(
+                terrain,
+                sp_act,
+                bc_test_act,
+                rng=rng,
+                num_envs=args.num_envs,
+                horizon=horizon,
+                n_episodes=args.n_episodes,
+            ),
+            seed=int(seed),
+            seed_idx=int(seed_idx),
         )
-        raw_row["PPO_SP+BC_test_1"][seed_idx] = _eval_joint(
-            terrain,
-            bc_test_act,
-            sp_act,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
+
+        rng = jax.random.PRNGKey(0)
+        raw_row["PPO_SP+BC_test_1"][seed_idx] = _timeit(
+            t0,
+            "eval:PPO_SP+BC_test_1",
+            lambda: _eval_joint(
+                terrain,
+                bc_test_act,
+                sp_act,
+                rng=rng,
+                num_envs=args.num_envs,
+                horizon=horizon,
+                n_episodes=args.n_episodes,
+            ),
+            seed=int(seed),
+            seed_idx=int(seed_idx),
         )
 
         print(
@@ -483,32 +572,49 @@ def main() -> None:
                 "PPO_SP+BC_test_1": raw_row["PPO_SP+BC_test_1"][seed_idx],
             }
         )
+        sys.stdout.flush()
 
     # PPO_BC_train
     for seed_idx, seed in enumerate(bc_train_seeds):
+        _log(t0, "load_ppo_bc_train_ckpt", seed=int(seed), seed_idx=int(seed_idx), ckpt=args.bc_ckpt)
         bc_name, bc_params = _load_first_available(
             ppo_runs_dir, ppo_bc_train_runs, seed=seed, ckpt=args.bc_ckpt
         )
+        _log(t0, "loaded_ppo_bc_train_ckpt", seed=int(seed), seed_idx=int(seed_idx), run_name=bc_name)
         bc_act = make_ppo_act(bc_params, stochastic=True)
 
         rng = jax.random.PRNGKey(0)
-        raw_row["PPO_BC_train+BC_test_0"][seed_idx] = _eval_joint(
-            terrain,
-            bc_act,
-            bc_test_act,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
+        raw_row["PPO_BC_train+BC_test_0"][seed_idx] = _timeit(
+            t0,
+            "eval:PPO_BC_train+BC_test_0",
+            lambda: _eval_joint(
+                terrain,
+                bc_act,
+                bc_test_act,
+                rng=rng,
+                num_envs=args.num_envs,
+                horizon=horizon,
+                n_episodes=args.n_episodes,
+            ),
+            seed=int(seed),
+            seed_idx=int(seed_idx),
         )
-        raw_row["PPO_BC_train+BC_test_1"][seed_idx] = _eval_joint(
-            terrain,
-            bc_test_act,
-            bc_act,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
+
+        rng = jax.random.PRNGKey(0)
+        raw_row["PPO_BC_train+BC_test_1"][seed_idx] = _timeit(
+            t0,
+            "eval:PPO_BC_train+BC_test_1",
+            lambda: _eval_joint(
+                terrain,
+                bc_test_act,
+                bc_act,
+                rng=rng,
+                num_envs=args.num_envs,
+                horizon=horizon,
+                n_episodes=args.n_episodes,
+            ),
+            seed=int(seed),
+            seed_idx=int(seed_idx),
         )
 
         print(
@@ -523,32 +629,49 @@ def main() -> None:
                 "PPO_BC_train+BC_test_1": raw_row["PPO_BC_train+BC_test_1"][seed_idx],
             }
         )
+        sys.stdout.flush()
 
     # PPO_BC_test (gold reference lines) — keep _0 and _1 separate
     for seed_idx, seed in enumerate(bc_test_seeds):
+        _log(t0, "load_ppo_bc_test_ckpt", seed=int(seed), seed_idx=int(seed_idx), ckpt=args.bc_ckpt)
         gs_name, gs_params = _load_first_available(
             ppo_runs_dir, ppo_bc_test_runs, seed=seed, ckpt=args.bc_ckpt
         )
+        _log(t0, "loaded_ppo_bc_test_ckpt", seed=int(seed), seed_idx=int(seed_idx), run_name=gs_name)
         gs_act = make_ppo_act(gs_params, stochastic=True)
 
         rng = jax.random.PRNGKey(0)
-        raw_row["PPO_BC_test+BC_test_0"][seed_idx] = _eval_joint(
-            terrain,
-            gs_act,
-            bc_test_act,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
+        raw_row["PPO_BC_test+BC_test_0"][seed_idx] = _timeit(
+            t0,
+            "eval:PPO_BC_test+BC_test_0",
+            lambda: _eval_joint(
+                terrain,
+                gs_act,
+                bc_test_act,
+                rng=rng,
+                num_envs=args.num_envs,
+                horizon=horizon,
+                n_episodes=args.n_episodes,
+            ),
+            seed=int(seed),
+            seed_idx=int(seed_idx),
         )
-        raw_row["PPO_BC_test+BC_test_1"][seed_idx] = _eval_joint(
-            terrain,
-            bc_test_act,
-            gs_act,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
+
+        rng = jax.random.PRNGKey(0)
+        raw_row["PPO_BC_test+BC_test_1"][seed_idx] = _timeit(
+            t0,
+            "eval:PPO_BC_test+BC_test_1",
+            lambda: _eval_joint(
+                terrain,
+                bc_test_act,
+                gs_act,
+                rng=rng,
+                num_envs=args.num_envs,
+                horizon=horizon,
+                n_episodes=args.n_episodes,
+            ),
+            seed=int(seed),
+            seed_idx=int(seed_idx),
         )
 
         print(
@@ -563,6 +686,7 @@ def main() -> None:
                 "PPO_BC_test+BC_test_1": raw_row["PPO_BC_test+BC_test_1"][seed_idx],
             }
         )
+        sys.stdout.flush()
 
     out_raw = {layout_key: raw_row}
     out_legacy = _to_legacy(layout_key, raw_row)
@@ -573,11 +697,13 @@ def main() -> None:
 
         raw_path = out_dir / f"results_raw_{layout}.json"
         raw_path.write_text(json.dumps(out_raw, indent=2) + "\n")
-        print(f"✓ Wrote (raw): {raw_path}")
+        _log(t0, "wrote_raw", path=str(raw_path))
 
         legacy_path = out_dir / f"results_{layout}.json"
         legacy_path.write_text(json.dumps(out_legacy, indent=2) + "\n")
-        print(f"✓ Wrote (legacy): {legacy_path}")
+        _log(t0, "wrote_legacy", path=str(legacy_path))
+
+    _log(t0, "done")
 
 
 if __name__ == "__main__":
