@@ -50,6 +50,12 @@ Debugging / progress logs
 -------------------------
 This script emits timestamped progress logs (JSON-ish dicts) to help diagnose slow
 imports, XLA compilation, checkpoint loading, or rollout evaluation stalls.
+
+Performance note
+----------------
+The BC policy action selection is vectorized + jitted to avoid the Python per-env
+loop in the legacy BCPartner, which can make evaluation (and training rollouts)
+appear "stuck" due to high host overhead.
 """
 
 import argparse
@@ -71,9 +77,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from human_aware_rl_jax_lift.agents.bc.model import BCPolicy
 from human_aware_rl_jax_lift.agents.ppo.model import ActorCriticCNN
+from human_aware_rl_jax_lift.encoding.bc_features import featurize_state_64
 from human_aware_rl_jax_lift.env.layouts import parse_layout
-from human_aware_rl_jax_lift.training.partners import BCPartner
 from human_aware_rl_jax_lift.training.vec_env import batched_step, encode_obs, make_batched_state
 
 
@@ -186,15 +193,34 @@ def make_ppo_act(params, *, stochastic: bool = True) -> Callable:
 
 
 def make_bc_act(params, terrain, *, stochastic: bool = True) -> Callable:
-    partner = BCPartner(params=params, terrain=terrain, stochastic=stochastic)
+    """Vectorized BC policy action function.
 
-    def act(obs_batch, rng: jax.Array, *, states, agent_idx):
-        return partner.act(
-            np.asarray(obs_batch),
-            rng,
-            states=states,
-            agent_idx=agent_idx,
-        )
+    This mirrors the legacy BCPartner semantics: the `agent_idx` argument indicates
+    which physical player is the *training agent*, and this policy acts as the
+    *other* agent.
+    """
+
+    model = BCPolicy()
+    apply_fn = jax.jit(model.apply)
+
+    def _features_other(states, agent_idx_j: jnp.ndarray) -> jnp.ndarray:
+        f0, f1 = jax.vmap(lambda s: featurize_state_64(terrain, s))(states)
+        return jnp.where(agent_idx_j[:, None] == 0, f1, f0)
+
+    @jax.jit
+    def _act_jax(states, agent_idx_j: jnp.ndarray, rng: jax.Array) -> jnp.ndarray:
+        feats = _features_other(states, agent_idx_j)
+        logits = apply_fn(params, feats)
+        if stochastic:
+            rngs = jax.random.split(rng, feats.shape[0])
+            a = jax.vmap(lambda lg, r: jax.random.categorical(r, lg, axis=-1))(logits, rngs)
+        else:
+            a = jnp.argmax(logits, axis=-1)
+        return a.astype(jnp.int32)
+
+    def act(_obs_batch, rng: jax.Array, *, states, agent_idx):
+        a = _act_jax(states, jnp.asarray(agent_idx, dtype=jnp.int32), rng)
+        return np.asarray(a, dtype=np.int32)
 
     return act
 
@@ -211,9 +237,19 @@ def _eval_joint(
 ) -> float:
     rng, env_rng = jax.random.split(rng)
     bstate = make_batched_state(terrain, num_envs, env_rng, randomize_agent_idx=False)
-    # Keep player assignment fixed so obs0/obs1 correspond to physical player0/player1.
+
+    # Keep env interpretation fixed: training_actions = physical player0, other_actions = physical player1.
     bstate = bstate.replace(agent_idx=jnp.zeros((num_envs,), dtype=jnp.int32))
+
     obs0, obs1 = encode_obs(terrain, bstate)
+
+    # Many partner-policy helpers (legacy BCPartner) interpret agent_idx as "who is the training agent"
+    # and act as the other agent. For evaluation, we need explicit physical player0/player1 actions.
+    # So we pass different agent_idx views to act0/act1:
+    # - To get an action for physical player0 (other agent), pretend training agent is player1 (agent_idx=1).
+    # - To get an action for physical player1 (other agent), pretend training agent is player0 (agent_idx=0).
+    agent_idx_for_p0 = np.ones((num_envs,), dtype=np.int32)
+    agent_idx_for_p1 = np.zeros((num_envs,), dtype=np.int32)
 
     ep_returns: List[float] = []
     ep_ret = np.zeros((num_envs,), dtype=np.float32)
@@ -227,8 +263,8 @@ def _eval_joint(
     for _ in range(max_steps):
         rng, k0, k1, kres = jax.random.split(rng, 4)
 
-        a0 = act0(obs0, k0, states=bstate.states, agent_idx=np.asarray(bstate.agent_idx))
-        a1 = act1(obs1, k1, states=bstate.states, agent_idx=np.asarray(bstate.agent_idx))
+        a0 = act0(obs0, k0, states=bstate.states, agent_idx=agent_idx_for_p0)
+        a1 = act1(obs1, k1, states=bstate.states, agent_idx=agent_idx_for_p1)
 
         reset_keys = jax.random.split(kres, num_envs)
         bstate, obs0, obs1, _rewards, dones, sparse_r = batched_step(
