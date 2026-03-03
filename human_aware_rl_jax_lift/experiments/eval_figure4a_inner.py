@@ -1,38 +1,50 @@
 """Figure 4A evaluation (inner loop).
 
-This script writes results in the legacy contract expected by:
-- human_aware_rl_jax_lift/experiments/prepare_results.py
-- human_aware_rl_jax_lift/experiments/figure4a.py
+This script evaluates trained policies and writes two artifacts:
 
-It is designed to run under the SLURM wrapper:
-  human_aware_rl_jax_lift/slurm/05_eval_figure4a.slurm
+1) Notebook-faithful raw results (matches the Figure 4A notebook pipeline)
+   Written to:
+     {out_dir}/results_raw_{layout}.json
 
-Output contract
---------------
-Writes a single JSON object to:
-  {out_dir}/results_{layout}.json
+   Schema:
+     raw[layout_key][experiment_key][seed_idx] -> float
 
-with schema:
-  results[layout_key][condition][seed_idx] -> float
-  results[layout_key]["gold_standard"] -> float
+   where experiment_key uses the notebook naming, e.g.:
+     - PPO_SP+PPO_SP
+     - PPO_SP+BC_test_0 / PPO_SP+BC_test_1
+     - PPO_BC_train+BC_test_0 / PPO_BC_train+BC_test_1
+     - PPO_BC_test+BC_test_0 / PPO_BC_test+BC_test_1
+     - BC_train+BC_test_0 / BC_train+BC_test_1
 
-where:
-- layout is the short SLURM layout name (simple, unident_s, random0, random1, random3)
-- layout_key matches figure4a.py's LAYOUT_ORDER
-- condition keys match figure4a.py's CONDITION_ORDER
-- seed_idx are contiguous integers starting at 0 (0..4 for the paper)
+2) Legacy adapter results (kept for figure4a.py / prepare_results.py)
+   Written to:
+     {out_dir}/results_{layout}.json
 
-Checkpoint semantics
--------------------
-Default behavior mirrors legacy: prefer "best" if available, else fallback to "final".
+   Schema:
+     legacy[layout_key][condition][seed_idx] -> float
+     legacy[layout_key]["gold_standard"] -> float
 
-Notes
------
+Key notebook-faithful behaviors
+------------------------------
+- Uses separate, hardcoded seed families (as in the notebook):
+    ppo_sp_seeds = [2229, 7649, 7225, 9807, 386]
+    ppo_bc_seeds["bc_train"] = [9456, 1887, 5578, 5987, 516]
+    ppo_bc_seeds["bc_test"]  = [2888, 7424, 7360, 4467, 184]
+
+- Checkpoint semantics (as in the notebook):
+    SP PPO           -> best (fallback to final if best missing)
+    PPO_BC train/test-> final (fallback to best if final missing)
+
+- Preserves the two gold-standard reference lines separately:
+    PPO_BC_test+BC_test_0 and PPO_BC_test+BC_test_1
+
+- Defaults to 40 evaluation episodes ("num_rounds" in the notebook).
+
+Evaluation notes
+----------------
 - Evaluation uses sparse reward only (shaping = 0.0) and horizon = 400.
 - Policies are evaluated stochastically.
-- Different PPO runs may have different raw seed folder names (e.g., seed184 vs seed386).
-  To avoid spurious failures, we discover seeds per *run group* (SP vs PPOBC vs gold)
-  and filter to seeds that actually contain a checkpoint file.
+- BC_test_0 vs BC_test_1 correspond to swapping player order in evaluation.
 """
 
 import argparse
@@ -68,6 +80,13 @@ _LAYOUT_KEY = {
     "random3": "counter_circuit",
 }
 
+# Notebook seed families (do not merge across PPO families)
+_PPO_SP_SEEDS = [2229, 7649, 7225, 9807, 386]
+_PPO_BC_SEEDS = {
+    "bc_train": [9456, 1887, 5578, 5987, 516],
+    "bc_test": [2888, 7424, 7360, 4467, 184],
+}
+
 
 def _load_bc_params(best_paths_file: Path, split: str, layout_name: str):
     with best_paths_file.open("rb") as f:
@@ -85,7 +104,7 @@ def _load_ppo_params(
     run_name: str,
     seed: int,
     *,
-    ckpt: str = "best",
+    ckpt: str,
 ):
     seed_dir = ppo_runs_dir / run_name / f"seed{seed}"
     best_dir = seed_dir / "best"
@@ -102,7 +121,9 @@ def _load_ppo_params(
     if ckpt not in ("best", "final"):
         raise ValueError(f"Invalid ckpt='{ckpt}'. Expected 'best' or 'final'.")
 
-    # Legacy semantics: try best if available, else final.
+    # Notebook semantics:
+    # - SP uses ckpt='best' -> try best then final
+    # - PPO_BC uses ckpt='final' -> try final then best
     if ckpt == "best":
         out = _try(best_dir)
         if out is not None:
@@ -122,60 +143,6 @@ def _load_ppo_params(
         f"Could not find PPO params for {run_name}/seed{seed} with ckpt='{ckpt}'. "
         f"Looked for {best_dir/'params.pkl'} and {final_dir/'params.pkl'}."
     )
-
-
-def _first_existing_run_dir(ppo_runs_dir: Path, run_names: Tuple[str, ...]) -> Path:
-    for name in run_names:
-        d = ppo_runs_dir / name
-        if d.exists() and d.is_dir():
-            return d
-    raise FileNotFoundError(f"None of these PPO run dirs exist under {ppo_runs_dir}: {run_names}")
-
-
-def _seed_has_any_ckpt(seed_dir: Path) -> bool:
-    return (seed_dir / "best" / "params.pkl").exists() or (seed_dir / "ppo_agent" / "params.pkl").exists()
-
-
-def _discover_seeds(run_dir: Path) -> List[int]:
-    seeds: List[int] = []
-    for p in run_dir.glob("seed*"):
-        if not p.is_dir():
-            continue
-        s = p.name.replace("seed", "")
-        if not s.isdigit():
-            continue
-        if not _seed_has_any_ckpt(p):
-            continue
-        seeds.append(int(s))
-
-    seeds.sort()
-    if not seeds:
-        raise FileNotFoundError(
-            f"No seed*/ directories with a checkpoint found under {run_dir}. "
-            f"Expected either best/params.pkl or ppo_agent/params.pkl inside each seed dir."
-        )
-    return seeds
-
-
-def _seeds_for_group(
-    *,
-    ppo_runs_dir: Path,
-    run_names: Tuple[str, ...],
-    num_seeds: int,
-    seed_override: Optional[int],
-    group_name: str,
-) -> List[int]:
-    if seed_override is not None:
-        return [int(seed_override)]
-
-    run_dir = _first_existing_run_dir(ppo_runs_dir, run_names)
-    discovered = _discover_seeds(run_dir)
-    if len(discovered) < int(num_seeds):
-        raise FileNotFoundError(
-            f"Not enough usable seeds for group '{group_name}'. Found {len(discovered)} under {run_dir}, "
-            f"need {num_seeds}. Usable seeds are: {discovered}"
-        )
-    return discovered[: int(num_seeds)]
 
 
 def make_ppo_act(params, *, stochastic: bool = True) -> Callable:
@@ -284,35 +251,84 @@ def _load_first_available(
     )
 
 
+def _ensure_seed_list(seeds: List[int], n: int, *, name: str) -> List[int]:
+    if len(seeds) < n:
+        raise ValueError(f"Seed list '{name}' has length {len(seeds)} but need {n}: {seeds}")
+    return seeds[:n]
+
+
+def _to_legacy(layout_key: str, raw_row: Dict[str, Dict[int, float]]) -> Dict[str, dict]:
+    legacy_row: Dict[str, dict] = {
+        "SP_SP": {},
+        "SP_HProxy": {},
+        "SP_HProxy_sw": {},
+        "PPOBC_HProxy": {},
+        "PPOBC_HProxy_sw": {},
+        "BC_HProxy": {},
+        "BC_HProxy_sw": {},
+        "gold_standard": None,
+    }
+
+    # Map raw keys to legacy keys
+    for seed_idx, v in raw_row["PPO_SP+PPO_SP"].items():
+        legacy_row["SP_SP"][seed_idx] = v
+    for seed_idx, v in raw_row["PPO_SP+BC_test_0"].items():
+        legacy_row["SP_HProxy"][seed_idx] = v
+    for seed_idx, v in raw_row["PPO_SP+BC_test_1"].items():
+        legacy_row["SP_HProxy_sw"][seed_idx] = v
+
+    for seed_idx, v in raw_row["PPO_BC_train+BC_test_0"].items():
+        legacy_row["PPOBC_HProxy"][seed_idx] = v
+    for seed_idx, v in raw_row["PPO_BC_train+BC_test_1"].items():
+        legacy_row["PPOBC_HProxy_sw"][seed_idx] = v
+
+    for seed_idx, v in raw_row["BC_train+BC_test_0"].items():
+        legacy_row["BC_HProxy"][seed_idx] = v
+    for seed_idx, v in raw_row["BC_train+BC_test_1"].items():
+        legacy_row["BC_HProxy_sw"][seed_idx] = v
+
+    # Legacy expects a single scalar gold_standard. Preserve backwards compatibility by
+    # averaging the two start-index conditions, then averaging across seeds.
+    gold_seed_vals: List[float] = []
+    for seed_idx in raw_row["PPO_BC_test+BC_test_0"].keys():
+        v0 = raw_row["PPO_BC_test+BC_test_0"][seed_idx]
+        v1 = raw_row["PPO_BC_test+BC_test_1"][seed_idx]
+        gold_seed_vals.append(0.5 * (v0 + v1))
+    legacy_row["gold_standard"] = float(np.mean(np.asarray(gold_seed_vals, dtype=np.float64))) if gold_seed_vals else None
+
+    return {layout_key: legacy_row}
+
+
 def main() -> None:
     default_data_dir = _PKG_ROOT / "data"
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--layout", required=True)
 
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Optional. If set, evaluates only this raw seed for PPO conditions.",
-    )
-
     parser.add_argument("--num_envs", type=int, default=30)
 
     parser.add_argument(
         "--n_episodes",
+        "--num_rounds",
         "--num_games",
         dest="n_episodes",
         type=int,
-        default=200,
-        help="Number of episodes (games) to evaluate per condition.",
+        default=40,
+        help="Number of episodes (games) to evaluate per condition (default: 40, matches notebook).",
     )
 
     parser.add_argument(
         "--num_seeds",
         type=int,
         default=5,
-        help="How many seeds to include when auto-discovering (default: 5).",
+        help="How many seeds from each notebook seed family to evaluate (default: 5).",
+    )
+
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional debug override: if set, evaluates only this raw seed for all PPO families.",
     )
 
     parser.add_argument("--ppo_runs_dir", type=str, default=str(default_data_dir / "ppo_runs"))
@@ -330,16 +346,25 @@ def main() -> None:
         "--out_dir",
         type=str,
         default=None,
-        help="If set, write results_{layout}.json into this directory.",
+        help="If set, write results_{layout}.json and results_raw_{layout}.json into this directory.",
     )
 
     parser.add_argument(
-        "--ckpt",
+        "--sp_ckpt",
         type=str,
         default="best",
         choices=["best", "final"],
-        help="Which PPO checkpoint to evaluate: 'best' (default; fallback to final) or 'final'.",
+        help="SP PPO checkpoint preference (default: best, matches notebook).",
     )
+
+    parser.add_argument(
+        "--bc_ckpt",
+        type=str,
+        default="final",
+        choices=["best", "final"],
+        help="PPO_BC train/test checkpoint preference (default: final, matches notebook).",
+    )
+
     args = parser.parse_args()
 
     layout = args.layout
@@ -348,90 +373,76 @@ def main() -> None:
 
     layout_key = _LAYOUT_KEY[layout]
     horizon = 400
-    num_slots = 1 if args.seed is not None else int(args.num_seeds)
+    n_seeds = int(args.num_seeds)
 
     terrain = parse_layout(layout)
 
     best_paths_file = Path(args.best_bc_paths)
     bc_train_params = _load_bc_params(best_paths_file, "train", layout)
-    hproxy_params = _load_bc_params(best_paths_file, "test", layout)
+    bc_test_params = _load_bc_params(best_paths_file, "test", layout)
 
     bc_train_act = make_bc_act(bc_train_params, terrain, stochastic=True)
-    hproxy_act = make_bc_act(hproxy_params, terrain, stochastic=True)
+    bc_test_act = make_bc_act(bc_test_params, terrain, stochastic=True)
 
     ppo_runs_dir = Path(args.ppo_runs_dir)
 
-    # Prefer the explicit legacy names first, but keep fallbacks for older dirs.
+    # Run directory names
     ppo_sp_runs = (f"ppo_sp_{layout}",)
-    ppo_bc_runs = (f"ppo_bc_train_{layout}", f"ppo_bc_{layout}")
-    ppo_gs_runs = (f"ppo_bc_test_{layout}", f"ppo_bc_test_{layout}_v0")
+    ppo_bc_train_runs = (f"ppo_bc_train_{layout}", f"ppo_bc_{layout}")
+    ppo_bc_test_runs = (f"ppo_bc_test_{layout}", f"ppo_bc_test_{layout}_v0")
 
-    sp_seeds = _seeds_for_group(
-        ppo_runs_dir=ppo_runs_dir,
-        run_names=ppo_sp_runs,
-        num_seeds=num_slots,
-        seed_override=args.seed,
-        group_name="SP",
-    )
-    bc_seeds = _seeds_for_group(
-        ppo_runs_dir=ppo_runs_dir,
-        run_names=ppo_bc_runs,
-        num_seeds=num_slots,
-        seed_override=args.seed,
-        group_name="PPOBC",
-    )
-    gs_seeds = _seeds_for_group(
-        ppo_runs_dir=ppo_runs_dir,
-        run_names=ppo_gs_runs,
-        num_seeds=num_slots,
-        seed_override=args.seed,
-        group_name="GoldStandard",
-    )
+    if args.seed is not None:
+        sp_seeds = [int(args.seed)]
+        bc_train_seeds = [int(args.seed)]
+        bc_test_seeds = [int(args.seed)]
+    else:
+        sp_seeds = _ensure_seed_list(_PPO_SP_SEEDS, n_seeds, name="PPO_SP")
+        bc_train_seeds = _ensure_seed_list(_PPO_BC_SEEDS["bc_train"], n_seeds, name="PPO_BC_train")
+        bc_test_seeds = _ensure_seed_list(_PPO_BC_SEEDS["bc_test"], n_seeds, name="PPO_BC_test")
 
-    row: Dict[str, dict] = {
-        "SP_SP": {},
-        "SP_HProxy": {},
-        "PPOBC_HProxy": {},
-        "BC_HProxy": {},
-        "SP_HProxy_sw": {},
-        "PPOBC_HProxy_sw": {},
-        "BC_HProxy_sw": {},
-        "gold_standard": None,
+    raw_row: Dict[str, Dict[int, float]] = {
+        "PPO_SP+PPO_SP": {},
+        "PPO_SP+BC_test_0": {},
+        "PPO_SP+BC_test_1": {},
+        "PPO_BC_train+BC_test_0": {},
+        "PPO_BC_train+BC_test_1": {},
+        "PPO_BC_test+BC_test_0": {},
+        "PPO_BC_test+BC_test_1": {},
+        "BC_train+BC_test_0": {},
+        "BC_train+BC_test_1": {},
     }
 
-    # BC+HProxy does not depend on PPO seeds; compute once and replicate.
+    # BC baseline does not depend on PPO seeds; compute once and replicate.
     rng = jax.random.PRNGKey(0)
-    v_bc_hp = _eval_joint(
+    v_bc0 = _eval_joint(
         terrain,
         bc_train_act,
-        hproxy_act,
+        bc_test_act,
         rng=rng,
         num_envs=args.num_envs,
         horizon=horizon,
         n_episodes=args.n_episodes,
     )
-    v_bc_hp_sw = _eval_joint(
+    v_bc1 = _eval_joint(
         terrain,
-        hproxy_act,
+        bc_test_act,
         bc_train_act,
         rng=rng,
         num_envs=args.num_envs,
         horizon=horizon,
         n_episodes=args.n_episodes,
     )
-    for seed_idx in range(num_slots):
-        row["BC_HProxy"][seed_idx] = v_bc_hp
-        row["BC_HProxy_sw"][seed_idx] = v_bc_hp_sw
+    for seed_idx in range(len(sp_seeds) if args.seed is not None else n_seeds):
+        raw_row["BC_train+BC_test_0"][seed_idx] = v_bc0
+        raw_row["BC_train+BC_test_1"][seed_idx] = v_bc1
 
-    # SP-based conditions
+    # SP PPO
     for seed_idx, seed in enumerate(sp_seeds):
-        sp_name, sp_params = _load_first_available(
-            ppo_runs_dir, ppo_sp_runs, seed=seed, ckpt=args.ckpt
-        )
+        sp_name, sp_params = _load_first_available(ppo_runs_dir, ppo_sp_runs, seed=seed, ckpt=args.sp_ckpt)
         sp_act = make_ppo_act(sp_params, stochastic=True)
 
         rng = jax.random.PRNGKey(0)
-        v_sp_sp = _eval_joint(
+        raw_row["PPO_SP+PPO_SP"][seed_idx] = _eval_joint(
             terrain,
             sp_act,
             sp_act,
@@ -440,28 +451,24 @@ def main() -> None:
             horizon=horizon,
             n_episodes=args.n_episodes,
         )
-        v_sp_hp = _eval_joint(
+        raw_row["PPO_SP+BC_test_0"][seed_idx] = _eval_joint(
             terrain,
             sp_act,
-            hproxy_act,
+            bc_test_act,
             rng=rng,
             num_envs=args.num_envs,
             horizon=horizon,
             n_episodes=args.n_episodes,
         )
-        v_sp_hp_sw = _eval_joint(
+        raw_row["PPO_SP+BC_test_1"][seed_idx] = _eval_joint(
             terrain,
-            hproxy_act,
+            bc_test_act,
             sp_act,
             rng=rng,
             num_envs=args.num_envs,
             horizon=horizon,
             n_episodes=args.n_episodes,
         )
-
-        row["SP_SP"][seed_idx] = v_sp_sp
-        row["SP_HProxy"][seed_idx] = v_sp_hp
-        row["SP_HProxy_sw"][seed_idx] = v_sp_hp_sw
 
         print(
             {
@@ -469,43 +476,40 @@ def main() -> None:
                 "layout_key": layout_key,
                 "seed": seed,
                 "seed_idx": seed_idx,
-                "ckpt": args.ckpt,
                 "ppo_sp_run_name": sp_name,
-                "SP_SP": v_sp_sp,
-                "SP_HProxy": v_sp_hp,
-                "SP_HProxy_sw": v_sp_hp_sw,
+                "sp_ckpt": args.sp_ckpt,
+                "PPO_SP+PPO_SP": raw_row["PPO_SP+PPO_SP"][seed_idx],
+                "PPO_SP+BC_test_0": raw_row["PPO_SP+BC_test_0"][seed_idx],
+                "PPO_SP+BC_test_1": raw_row["PPO_SP+BC_test_1"][seed_idx],
             }
         )
 
-    # PPO_BC-based conditions
-    for seed_idx, seed in enumerate(bc_seeds):
+    # PPO_BC_train
+    for seed_idx, seed in enumerate(bc_train_seeds):
         bc_name, bc_params = _load_first_available(
-            ppo_runs_dir, ppo_bc_runs, seed=seed, ckpt=args.ckpt
+            ppo_runs_dir, ppo_bc_train_runs, seed=seed, ckpt=args.bc_ckpt
         )
-        ppo_bc_act = make_ppo_act(bc_params, stochastic=True)
+        bc_act = make_ppo_act(bc_params, stochastic=True)
 
         rng = jax.random.PRNGKey(0)
-        v_ppobc_hp = _eval_joint(
+        raw_row["PPO_BC_train+BC_test_0"][seed_idx] = _eval_joint(
             terrain,
-            ppo_bc_act,
-            hproxy_act,
+            bc_act,
+            bc_test_act,
             rng=rng,
             num_envs=args.num_envs,
             horizon=horizon,
             n_episodes=args.n_episodes,
         )
-        v_ppobc_hp_sw = _eval_joint(
+        raw_row["PPO_BC_train+BC_test_1"][seed_idx] = _eval_joint(
             terrain,
-            hproxy_act,
-            ppo_bc_act,
+            bc_test_act,
+            bc_act,
             rng=rng,
             num_envs=args.num_envs,
             horizon=horizon,
             n_episodes=args.n_episodes,
         )
-
-        row["PPOBC_HProxy"][seed_idx] = v_ppobc_hp
-        row["PPOBC_HProxy_sw"][seed_idx] = v_ppobc_hp_sw
 
         print(
             {
@@ -513,41 +517,39 @@ def main() -> None:
                 "layout_key": layout_key,
                 "seed": seed,
                 "seed_idx": seed_idx,
-                "ckpt": args.ckpt,
-                "ppo_bc_run_name": bc_name,
-                "PPOBC_HProxy": v_ppobc_hp,
-                "PPOBC_HProxy_sw": v_ppobc_hp_sw,
+                "ppo_bc_train_run_name": bc_name,
+                "bc_ckpt": args.bc_ckpt,
+                "PPO_BC_train+BC_test_0": raw_row["PPO_BC_train+BC_test_0"][seed_idx],
+                "PPO_BC_train+BC_test_1": raw_row["PPO_BC_train+BC_test_1"][seed_idx],
             }
         )
 
-    # Gold standard: PPO trained with HProxy, paired with HProxy.
-    gold_vals: List[float] = []
-    for seed_idx, seed in enumerate(gs_seeds):
+    # PPO_BC_test (gold reference lines) — keep _0 and _1 separate
+    for seed_idx, seed in enumerate(bc_test_seeds):
         gs_name, gs_params = _load_first_available(
-            ppo_runs_dir, ppo_gs_runs, seed=seed, ckpt=args.ckpt
+            ppo_runs_dir, ppo_bc_test_runs, seed=seed, ckpt=args.bc_ckpt
         )
         gs_act = make_ppo_act(gs_params, stochastic=True)
 
         rng = jax.random.PRNGKey(0)
-        v_gs_0 = _eval_joint(
+        raw_row["PPO_BC_test+BC_test_0"][seed_idx] = _eval_joint(
             terrain,
             gs_act,
-            hproxy_act,
+            bc_test_act,
             rng=rng,
             num_envs=args.num_envs,
             horizon=horizon,
             n_episodes=args.n_episodes,
         )
-        v_gs_1 = _eval_joint(
+        raw_row["PPO_BC_test+BC_test_1"][seed_idx] = _eval_joint(
             terrain,
-            hproxy_act,
+            bc_test_act,
             gs_act,
             rng=rng,
             num_envs=args.num_envs,
             horizon=horizon,
             n_episodes=args.n_episodes,
         )
-        gold_vals.append(0.5 * (v_gs_0 + v_gs_1))
 
         print(
             {
@@ -555,22 +557,27 @@ def main() -> None:
                 "layout_key": layout_key,
                 "seed": seed,
                 "seed_idx": seed_idx,
-                "ckpt": args.ckpt,
-                "ppo_gold_run_name": gs_name,
-                "gold_standard_seed": gold_vals[-1],
+                "ppo_bc_test_run_name": gs_name,
+                "bc_ckpt": args.bc_ckpt,
+                "PPO_BC_test+BC_test_0": raw_row["PPO_BC_test+BC_test_0"][seed_idx],
+                "PPO_BC_test+BC_test_1": raw_row["PPO_BC_test+BC_test_1"][seed_idx],
             }
         )
 
-    row["gold_standard"] = float(np.mean(np.asarray(gold_vals, dtype=np.float64))) if gold_vals else None
-
-    out_obj = {layout_key: row}
+    out_raw = {layout_key: raw_row}
+    out_legacy = _to_legacy(layout_key, raw_row)
 
     if args.out_dir is not None:
         out_dir = Path(args.out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"results_{layout}.json"
-        out_path.write_text(json.dumps(out_obj, indent=2) + "\n")
-        print(f"✓ Wrote: {out_path}")
+
+        raw_path = out_dir / f"results_raw_{layout}.json"
+        raw_path.write_text(json.dumps(out_raw, indent=2) + "\n")
+        print(f"✓ Wrote (raw): {raw_path}")
+
+        legacy_path = out_dir / f"results_{layout}.json"
+        legacy_path.write_text(json.dumps(out_legacy, indent=2) + "\n")
+        print(f"✓ Wrote (legacy): {legacy_path}")
 
 
 if __name__ == "__main__":
