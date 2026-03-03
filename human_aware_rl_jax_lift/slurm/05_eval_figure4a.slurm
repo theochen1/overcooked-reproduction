@@ -1,6 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=oc_fig4a_eval
 #SBATCH --array=0-4%2
+#SBATCH --account=mit_general
+#SBATCH --qos=normal
+#SBATCH --partition=mit_normal_gpu
 #SBATCH -G 1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
