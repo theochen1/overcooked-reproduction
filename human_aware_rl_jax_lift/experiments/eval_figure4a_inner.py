@@ -49,13 +49,19 @@ Evaluation notes
 Debugging / progress logs
 -------------------------
 This script emits timestamped progress logs (JSON-ish dicts) to help diagnose slow
-imports, XLA compilation, checkpoint loading, or rollout evaluation stalls.
+imports, XLA compilation, checkpoint loading, rollout evaluation, or stalls.
 
 Performance note
 ----------------
 The BC policy action selection is vectorized + jitted to avoid the Python per-env
 loop in the legacy BCPartner, which can make evaluation (and training rollouts)
 appear "stuck" due to high host overhead.
+
+Legacy heuristic note
+---------------------
+The TF codebase used a small "unstuck" heuristic for BC: if the agent hasn't
+moved for `stuck_time` steps, block recently-taken actions and renormalize.
+We implement an equivalent heuristic in the vectorized BC actor below.
 """
 
 import argparse
@@ -74,6 +80,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 import jax
+import jax.nn as jnn
 import jax.numpy as jnp
 import numpy as np
 
@@ -198,29 +205,107 @@ def make_bc_act(params, terrain, *, stochastic: bool = True) -> Callable:
     This mirrors the legacy BCPartner semantics: the `agent_idx` argument indicates
     which physical player is the *training agent*, and this policy acts as the
     *other* agent.
+
+    We also include the legacy "unstuck" heuristic from BCAgent._unstuck_adjust:
+    if the (other) player's position hasn't changed for `stuck_time` steps, block
+    probability mass on recently-taken actions and renormalize.
     """
 
     model = BCPolicy()
     apply_fn = jax.jit(model.apply)
+
+    stuck_time = 3
+    hist_len = stuck_time + 1
+
+    # Stateful (host-side) per-env history buffers.
+    _pos_hist: Optional[np.ndarray] = None  # (N, hist_len, 2)
+    _act_hist: Optional[np.ndarray] = None  # (N, hist_len)
+    _filled: Optional[np.ndarray] = None  # (N,)
 
     def _features_other(states, agent_idx_j: jnp.ndarray) -> jnp.ndarray:
         f0, f1 = jax.vmap(lambda s: featurize_state_64(terrain, s))(states)
         return jnp.where(agent_idx_j[:, None] == 0, f1, f0)
 
     @jax.jit
-    def _act_jax(states, agent_idx_j: jnp.ndarray, rng: jax.Array) -> jnp.ndarray:
+    def _unstuck_adjust_batch(
+        probs: jnp.ndarray, stuck_mask: jnp.ndarray, blocked_actions: jnp.ndarray
+    ) -> jnp.ndarray:
+        # probs: (N, A)
+        # stuck_mask: (N,) bool
+        # blocked_actions: (N, hist_len) int32
+        n, _a = probs.shape
+        mask = jnp.ones_like(probs)
+        mask = mask.at[jnp.arange(n)[:, None], blocked_actions].set(0.0)
+        out = probs * mask
+        norm = out.sum(axis=-1, keepdims=True)
+        out_norm = jnp.where(norm > 0, out / norm, probs)
+        return jnp.where(stuck_mask[:, None], out_norm, probs)
+
+    @jax.jit
+    def _act_jax(
+        states,
+        agent_idx_j: jnp.ndarray,
+        rng: jax.Array,
+        stuck_mask: jnp.ndarray,
+        blocked_actions: jnp.ndarray,
+    ) -> jnp.ndarray:
         feats = _features_other(states, agent_idx_j)
         logits = apply_fn(params, feats)
+        probs = jnn.softmax(logits, axis=-1)
+        probs = _unstuck_adjust_batch(probs, stuck_mask, blocked_actions)
         if stochastic:
-            rngs = jax.random.split(rng, feats.shape[0])
-            a = jax.vmap(lambda lg, r: jax.random.categorical(r, lg, axis=-1))(logits, rngs)
+            rngs = jax.random.split(rng, probs.shape[0])
+            logp = jnp.log(jnp.clip(probs, 1e-20, 1.0))
+            a = jax.vmap(lambda lg, r: jax.random.categorical(r, lg, axis=-1))(logp, rngs)
         else:
-            a = jnp.argmax(logits, axis=-1)
+            a = jnp.argmax(probs, axis=-1)
         return a.astype(jnp.int32)
 
     def act(_obs_batch, rng: jax.Array, *, states, agent_idx):
-        a = _act_jax(states, jnp.asarray(agent_idx, dtype=jnp.int32), rng)
-        return np.asarray(a, dtype=np.int32)
+        nonlocal _pos_hist, _act_hist, _filled
+
+        agent_idx_np = np.asarray(agent_idx, dtype=np.int32)
+        n = int(agent_idx_np.shape[0])
+
+        if _pos_hist is None or _pos_hist.shape[0] != n:
+            _pos_hist = np.zeros((n, hist_len, 2), dtype=np.int32)
+            _act_hist = np.zeros((n, hist_len), dtype=np.int32)
+            _filled = np.zeros((n,), dtype=np.int32)
+
+        # Reset history on environment resets (timestep == 0 in our state container).
+        timestep = np.asarray(states.timestep, dtype=np.int32)  # (N,)
+        reset_mask = timestep == 0
+        if np.any(reset_mask):
+            _pos_hist[reset_mask] = 0
+            _act_hist[reset_mask] = 0
+            _filled[reset_mask] = 0
+
+        # Select the "other" physical player's position (mirrors BCPartner semantics).
+        other_idx = 1 - agent_idx_np
+        player_pos = np.asarray(states.player_pos, dtype=np.int32)  # (N, 2, 2)
+        pos_other = player_pos[np.arange(n), other_idx]  # (N, 2)
+
+        # Stuck condition based on *previous* history (matches BCAgent timing).
+        same_pos = np.all(_pos_hist == _pos_hist[:, :1, :], axis=(1, 2))
+        stuck_mask_np = (_filled >= hist_len) & same_pos
+
+        a = _act_jax(
+            states,
+            jnp.asarray(agent_idx_np, dtype=jnp.int32),
+            rng,
+            jnp.asarray(stuck_mask_np, dtype=jnp.bool_),
+            jnp.asarray(_act_hist, dtype=jnp.int32),
+        )
+        a_np = np.asarray(a, dtype=np.int32)
+
+        # Update histories with current position + chosen action.
+        _pos_hist[:, :-1, :] = _pos_hist[:, 1:, :]
+        _act_hist[:, :-1] = _act_hist[:, 1:]
+        _pos_hist[:, -1, :] = pos_other
+        _act_hist[:, -1] = a_np
+        _filled = np.minimum(_filled + 1, hist_len)
+
+        return a_np
 
     return act
 
