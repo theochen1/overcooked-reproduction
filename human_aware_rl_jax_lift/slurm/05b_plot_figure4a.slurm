@@ -1,5 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=oc_fig4a_plot
+#SBATCH --array=0-4%2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --time=00:10:00
