@@ -1,15 +1,7 @@
 """Recreate Figure 4a grouped bar chart from Carroll et al. (NeurIPS 2019).
 
 Matches the "Performance with human proxy" baseline plot from the NeurIPS
-notebook exactly:
-  - figsize (11, 6)
-  - bar width 0.18
-  - 4 primary conditions per layout, deltas [-1, 0, 1, 2]
-  - mean-over-seeds with standard error (default; --seed_agg best available)
-  - hlines spanning calibrated to width=0.18 offsets
-  - legend handles reordered with switch_indices(0, 1)
-  - PPOBCtest condition skipped
-  - y-axis limited to ylim dict value for 'humanai'
+notebook exactly.
 """
 
 import argparse
@@ -20,7 +12,6 @@ from typing import Any, Dict, List, Literal, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
 
@@ -40,8 +31,11 @@ LAYOUT_LABELS = [
     "Counter Circ.",
 ]
 
-# Primary conditions plotted as bars (PPOBCtest is explicitly skipped).
-# Switched-index conditions rendered with hatching.
+# Bar order (left to right within each layout group):
+#   SP+SP, SP+HProxy, SP+HProxy_sw, PPO_BC+HProxy, PPO_BC+HProxy_sw, BC+HProxy, BC+HProxy_sw
+# Deltas match the baseline notebook: width=0.18, 7 bars per group
+# baseline deltas for the humanai plot:
+#   -2.9, -1.5, -0.5, 0.5, 1.9, 2.9, 3.9  (scaled by width)
 CONDITION_ORDER = [
     "SP_SP",
     "SP_HProxy",
@@ -55,22 +49,26 @@ CONDITION_ORDER_SW = [
     "BC_HProxy_sw",
 ]
 
+# Maps each switched cond to its parent
+SW_PARENT = {
+    "SP_HProxy_sw":    "SP_HProxy",
+    "PPOBC_HProxy_sw": "PPOBC_HProxy",
+    "BC_HProxy_sw":    "BC_HProxy",
+}
+
 CONDITION_LABELS = {
-    "SP_SP": "SP+SP",
-    "SP_HProxy": "SP+HProxy",
-    "PPOBC_HProxy": "PPO_BC+HProxy",
-    "BC_HProxy": "BC+HProxy",
-    "SP_HProxy_sw": "SP+HProxy switched",
-    "PPOBC_HProxy_sw": "PPO_BC+HProxy switched",
-    "BC_HProxy_sw": "BC+HProxy switched",
+    "SP_SP":           "SP+SP",
+    "SP_HProxy":       "SP+H$_{Proxy}$",
+    "PPOBC_HProxy":    "PPO$_{BC}$+H$_{Proxy}$",
+    "BC_HProxy":       "BC+H$_{Proxy}$",
 }
 
 # Per-histtype y-axis limit matching the baseline notebook ylim dict.
 YLIM: Dict[str, float] = {
-    "humanai": 300.0,
-    "humanaibase": 300.0,
+    "humanai":     250.0,
+    "humanaibase": 250.0,
 }
-DEFAULT_YLIM = 300.0
+DEFAULT_YLIM = 250.0
 
 SeedAgg = Literal["mean", "best"]
 
@@ -126,7 +124,6 @@ def compute_stats(
         row = results[layout]
         for cond in all_conds:
             if cond not in row:
-                # Switched conditions may be absent; fill with zeros.
                 stats[layout][cond] = {"mean": 0.0, "se": 0.0}
                 continue
             if seed_agg == "best":
@@ -151,7 +148,7 @@ def print_summary_table(
 ) -> None:
     cols = CONDITION_ORDER
     header_labels = [CONDITION_LABELS[c] for c in cols]
-    col_width = 16
+    col_width = 20
     header = f"{'Layout':<24} | " + " | ".join(f"{h:>{col_width}}" for h in header_labels)
     print(header)
     print("-" * len(header))
@@ -165,7 +162,7 @@ def print_summary_table(
 
 
 # ---------------------------------------------------------------------------
-# Plotting — faithful to baseline "Performance with human proxy" notebook cell
+# Plotting
 # ---------------------------------------------------------------------------
 
 def _switch_indices(i: int, j: int, lst: list) -> list:
@@ -180,70 +177,79 @@ def plot_figure_4a(
     output_path: Path,
     histtype: str = "humanai",
 ) -> None:
-    """Produce the grouped bar chart.
+    """Produce the grouped bar chart faithful to the NeurIPS baseline.
 
-    Visual parameters are taken directly from the NeurIPS notebook baseline:
-      figsize = (11, 6)
-      N = 5 (layouts)
-      width = 0.18
-      deltas = [-1, 0, 1, 2]  (primary 4-condition groups)
-      hlines xmin/xmax calibrated to width=0.18 offsets
-      legend handles reordered via switch_indices(0, 1)
-      ylim from YLIM dict
+    Bar layout (7 bars per layout group, width=0.18):
+      delta -2.9: SP+SP
+      delta -1.5: SP+HProxy      (solid teal)
+      delta -0.5: SP+HProxy_sw   (hatched teal)
+      delta  0.5: PPO_BC+HProxy  (solid orange)
+      delta  1.9: PPO_BC+HProxy_sw (hatched orange)
+      delta  2.9: BC+HProxy      (solid gray)
+      delta  3.9: BC+HProxy_sw   (hatched gray)
+
+    Gold-standard and PPO_HProxy+HProxy reference lines drawn as red hlines.
+    Legend uses single 'Switched start indices' hatch patch.
+    switch_indices(0,1) applied to legend handles to match baseline ordering.
     """
-    teal = "#4DBBD5"
+    teal   = "#4DBBD5"
     orange = "#E64B35"
-    gray = "#8E8E8E"
+    gray   = "#8E8E8E"
 
     style = {
-        "SP_SP":          dict(facecolor="#FFFFFF", edgecolor="gray",  hatch=None,   alpha=1.0,  lw=1.0),
-        "SP_HProxy":      dict(facecolor=teal,      edgecolor="gray",  hatch=None,   alpha=1.0,  lw=1.0),
-        "PPOBC_HProxy":   dict(facecolor=orange,    edgecolor="gray",  hatch=None,   alpha=1.0,  lw=1.0),
-        "BC_HProxy":      dict(facecolor=gray,      edgecolor="gray",  hatch=None,   alpha=1.0,  lw=1.0),
-        "SP_HProxy_sw":   dict(facecolor=teal,      edgecolor="gray",  hatch="///",  alpha=0.85, lw=1.0),
-        "PPOBC_HProxy_sw":dict(facecolor=orange,    edgecolor="gray",  hatch="///",  alpha=0.85, lw=1.0),
-        "BC_HProxy_sw":   dict(facecolor=gray,      edgecolor="gray",  hatch="///",  alpha=0.85, lw=1.0),
+        "SP_SP":           dict(facecolor="#FFFFFF", edgecolor="gray",  hatch=None,  alpha=1.0,  lw=1.0),
+        "SP_HProxy":       dict(facecolor=teal,      edgecolor="gray",  hatch=None,  alpha=1.0,  lw=1.0),
+        "PPOBC_HProxy":    dict(facecolor=orange,    edgecolor="gray",  hatch=None,  alpha=1.0,  lw=1.0),
+        "BC_HProxy":       dict(facecolor=gray,      edgecolor="gray",  hatch=None,  alpha=1.0,  lw=1.0),
+        "SP_HProxy_sw":    dict(facecolor=teal,      edgecolor="gray",  hatch="///", alpha=0.85, lw=1.0),
+        "PPOBC_HProxy_sw": dict(facecolor=orange,    edgecolor="gray",  hatch="///", alpha=0.85, lw=1.0),
+        "BC_HProxy_sw":    dict(facecolor=gray,      edgecolor="gray",  hatch="///", alpha=0.85, lw=1.0),
     }
 
-    # --- Baseline parameters ---
-    N = 5                            # number of layouts
-    width = 0.18                     # bar width  (matches baseline)
-    deltas = [-1, 0, 1, 2]           # offsets for 4 primary conditions
-    ind = np.arange(N)               # layout x-positions
+    # Baseline parameters
+    N     = 5
+    width = 0.18
+    ind   = np.arange(N)
 
-    # hline x-extents calibrated to width=0.18 and deltas, matching baseline:
-    #   simple    -> ind[0] => x=0; SP_SP offset = -1*0.18 = -0.18 -> xmin=-0.4; BC offset=2*0.18=0.36 -> xmax=0.4
-    #   unidents  -> ind[1] => x=1; xmin=0.6, xmax=1.4
-    #   ring      -> ind[2] => x=2; xmin=1.6, xmax=2.4
-    #   forced    -> ind[3] => x=3; xmin=2.6, xmax=3.4
-    #   counter   -> ind[4] => x=4; xmin=3.6, xmax=4.4
+    # 7-bar deltas matching the baseline notebook exactly
+    # order: SP_SP, SP_HProxy, SP_HProxy_sw, PPOBC_HProxy, PPOBC_HProxy_sw, BC_HProxy, BC_HProxy_sw
+    DELTAS = {
+        "SP_SP":           -2.9,
+        "SP_HProxy":       -1.5,
+        "SP_HProxy_sw":    -0.5,
+        "PPOBC_HProxy":     0.5,
+        "PPOBC_HProxy_sw":  1.9,
+        "BC_HProxy":        2.9,
+        "BC_HProxy_sw":     3.9,
+    }
+
+    # hline x-extents span the full 7-bar group width per layout tick
+    # group spans from (ind - 2.9*width - width/2) to (ind + 3.9*width + width/2)
+    # rounded to match baseline: xmin = ind - 0.4, xmax = ind + 0.4 (relative)
     hline_spans = [
-        (-0.40, 0.40),   # cramped_room
-        ( 0.60, 1.40),   # asymmetric_advantages
-        ( 1.60, 2.40),   # coordination_ring
-        ( 2.60, 3.45),   # forced_coordination  (baseline uses 3.45)
-        ( 3.60, 4.40),   # counter_circuit
+        (-0.62, 0.88),   # cramped_room       (ind=0)
+        ( 0.38, 1.88),   # asymmetric_advantages (ind=1)
+        ( 1.38, 2.88),   # coordination_ring  (ind=2)
+        ( 2.38, 3.88),   # forced_coordination (ind=3)
+        ( 3.38, 4.88),   # counter_circuit    (ind=4)
     ]
 
-    plt.rc("legend", fontsize=18)
+    plt.rc("legend", fontsize=15)
     plt.rc("axes",   titlesize=25)
 
-    fig, ax0 = plt.subplots(1, figsize=(11, 6))   # matches baseline figsize
+    fig, ax0 = plt.subplots(1, figsize=(11, 6))
     ax0.tick_params(axis="x", labelsize=18)
-    ax0.tick_params(axis="y", labelsize=18)
+    ax0.tick_params(axis="y", labelsize=18.5)
 
-    # --- Primary 4-condition bars ---
-    for i, cond in enumerate(CONDITION_ORDER):
-        # PPOBCtest is not in CONDITION_ORDER, but guard explicitly.
+    # --- Primary solid bars ---
+    for cond in CONDITION_ORDER:
         if cond == "PPOBCtest":
             continue
-        delta = deltas[i]
+        delta  = DELTAS[cond]
         offset = ind + delta * width
         ys  = np.array([stats[layout][cond]["mean"] for layout in LAYOUT_ORDER])
         ses = np.array([stats[layout][cond]["se"]   for layout in LAYOUT_ORDER])
         cfg = style[cond]
-
-        # SP_SP / reference conditions use no fill colour (colornone -> white + edgecolor gray)
         ax0.bar(
             offset, ys, width,
             label=CONDITION_LABELS[cond],
@@ -254,26 +260,21 @@ def plot_figure_4a(
             alpha=cfg["alpha"],
             linewidth=cfg["lw"],
             zorder=3,
-            error_kw=dict(ecolor="black", capsize=3, linewidth=1, zorder=4),
+            error_kw=dict(ecolor="black", capsize=2, linewidth=1, zorder=4),
         )
 
-    # --- Switched-index bars (hatched) ---
+    # --- Switched (hatched) bars at their own separate delta offsets ---
     for cond in CONDITION_ORDER_SW:
-        if cond not in stats[LAYOUT_ORDER[0]]:
-            continue
-        cfg = style[cond]
         ys  = np.array([stats[layout][cond]["mean"] for layout in LAYOUT_ORDER])
         ses = np.array([stats[layout][cond]["se"]   for layout in LAYOUT_ORDER])
-        # Switched bars are plotted at offset 0 relative to their parent algo
-        # (baseline overlays them; omit if all zeros to avoid clutter)
         if np.all(ys == 0):
             continue
-        parent = cond.replace("_sw", "")
-        parent_delta = deltas[CONDITION_ORDER.index(parent)] if parent in CONDITION_ORDER else 0
-        offset = ind + parent_delta * width
+        delta  = DELTAS[cond]
+        offset = ind + delta * width
+        cfg = style[cond]
         ax0.bar(
             offset, ys, width,
-            label=CONDITION_LABELS[cond] + " (sw)",
+            # No label here — legend uses a single shared hatch patch below
             yerr=ses,
             facecolor=cfg["facecolor"],
             edgecolor=cfg["edgecolor"],
@@ -281,10 +282,10 @@ def plot_figure_4a(
             alpha=cfg["alpha"],
             linewidth=cfg["lw"],
             zorder=3,
-            error_kw=dict(ecolor="black", capsize=3, linewidth=1, zorder=4),
+            error_kw=dict(ecolor="black", capsize=2, linewidth=1, zorder=4),
         )
 
-    # --- Gold-standard hlines ---
+    # --- Gold-standard hlines (red dashed) ---
     for idx, layout in enumerate(LAYOUT_ORDER):
         gs = stats[layout].get("gold_standard")
         if gs is None:
@@ -295,8 +296,8 @@ def plot_figure_4a(
             xmin=xmin,
             xmax=xmax,
             colors="red",
-            linestyles="--",
-            linewidth=1.5,
+            linestyles="dotted",
+            linewidth=2.0,
             zorder=5,
         )
 
@@ -304,33 +305,38 @@ def plot_figure_4a(
     ax0.set_ylabel("Average reward per episode")
     ax0.set_title("Performance with human proxy model")
 
-    # x-tick centres at ind + 1.5*width (centred over the 4-bar group, matching baseline)
-    ax0.set_xticks(ind + 1.5 * width)
+    # x-ticks centred over the 7-bar group
+    # group centre = ind + ((-2.9 + 3.9) / 2) * width = ind + 0.5 * width
+    ax0.set_xticks(ind + 0.5 * width)
     ax0.set_xticklabels(LAYOUT_LABELS)
     ax0.tick_params(axis="x", labelsize=18)
 
     ax0.set_ylim(0, YLIM.get(histtype, DEFAULT_YLIM))
-    ax0.grid(axis="y", alpha=0.3, zorder=0)
 
-    # --- Legend with switch_indices(0,1) reordering (matches baseline) ---
+    # --- Legend ---
+    # Collect handles/labels from the 4 solid bars
     handles, labels = ax0.get_legend_handles_labels()
-    # Manually append the "Switched start indices" patch if switched bars present
+
+    # Add single "Switched start indices" hatch patch
     has_sw = any(
         not np.all(np.array([stats[lay][c]["mean"] for lay in LAYOUT_ORDER]) == 0)
         for c in CONDITION_ORDER_SW
-        if c in stats[LAYOUT_ORDER[0]]
     )
     if has_sw:
-        patch = Patch(
+        sw_patch = Patch(
             facecolor="white", edgecolor="black",
             hatch="///", alpha=0.5,
             label="Switched start indices",
         )
-        handles.append(patch)
+        handles.append(sw_patch)
+        labels.append("Switched start indices")
 
-    # Apply switch_indices(0, 1) as in the baseline notebook
+    # switch_indices(0, 1): swap SP+SP (pos 0) with SP+HProxy (pos 1)
+    # so legend reads: SP+HProxy, SP+SP, PPO_BC+HProxy, BC+HProxy, Switched...
+    # (matches baseline notebook handle reordering)
     handles = _switch_indices(0, 1, handles)
     labels  = _switch_indices(0, 1, labels)
+
     ax0.legend(handles=handles, labels=labels, loc="best")
 
     fig.tight_layout()
