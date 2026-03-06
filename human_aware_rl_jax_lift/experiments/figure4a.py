@@ -33,9 +33,6 @@ LAYOUT_LABELS = [
 
 # Bar order (left to right within each layout group):
 #   SP+SP, SP+HProxy, SP+HProxy_sw, PPO_BC+HProxy, PPO_BC+HProxy_sw, BC+HProxy, BC+HProxy_sw
-# Deltas match the baseline notebook: width=0.18, 7 bars per group
-# baseline deltas for the humanai plot:
-#   -2.9, -1.5, -0.5, 0.5, 1.9, 2.9, 3.9  (scaled by width)
 CONDITION_ORDER = [
     "SP_SP",
     "SP_HProxy",
@@ -63,7 +60,7 @@ CONDITION_LABELS = {
     "BC_HProxy":       "BC+H$_{Proxy}$",
 }
 
-# Per-histtype y-axis limit matching the baseline notebook ylim dict.
+# Per-histtype y-axis limit
 YLIM: Dict[str, float] = {
     "humanai":     250.0,
     "humanaibase": 250.0,
@@ -179,18 +176,11 @@ def plot_figure_4a(
 ) -> None:
     """Produce the grouped bar chart faithful to the NeurIPS baseline.
 
-    Bar layout (7 bars per layout group, width=0.18):
-      delta -2.9: SP+SP
-      delta -1.5: SP+HProxy      (solid teal)
-      delta -0.5: SP+HProxy_sw   (hatched teal)
-      delta  0.5: PPO_BC+HProxy  (solid orange)
-      delta  1.9: PPO_BC+HProxy_sw (hatched orange)
-      delta  2.9: BC+HProxy      (solid gray)
-      delta  3.9: BC+HProxy_sw   (hatched gray)
+    Bar layout (7 bars per layout group):
+      SP+SP, SP+HProxy, SP+HProxy_sw, PPO_BC+HProxy, PPO_BC+HProxy_sw, BC+HProxy, BC+HProxy_sw
 
-    Gold-standard and PPO_HProxy+HProxy reference lines drawn as red hlines.
+    Gold-standard reference line drawn as red dotted hline.
     Legend uses single 'Switched start indices' hatch patch.
-    switch_indices(0,1) applied to legend handles to match baseline ordering.
     """
     teal   = "#4DBBD5"
     orange = "#E64B35"
@@ -206,45 +196,43 @@ def plot_figure_4a(
         "BC_HProxy_sw":    dict(facecolor=gray,      edgecolor="gray",  hatch="///", alpha=0.85, lw=1.0),
     }
 
-    # Baseline parameters
     N     = 5
-    width = 0.18
+    # width=0.12 means 7 bars span 6.8*0.12 = 0.816 units, well within the
+    # 1-unit spacing between layout groups so bars never overlap.
+    width = 0.12
     ind   = np.arange(N)
 
-    # 7-bar deltas matching the baseline notebook exactly
-    # order: SP_SP, SP_HProxy, SP_HProxy_sw, PPOBC_HProxy, PPOBC_HProxy_sw, BC_HProxy, BC_HProxy_sw
+    # 7-bar deltas (unitless multiples of `width`).
+    # Centre of the 7-bar group = mean(-3, -2, -1, 0, 1, 2, 3) = 0.0
+    # Outermost bars at ±3 -> group spans ±3.5*width = ±0.42 around each tick.
     DELTAS = {
-        "SP_SP":           -2.9,
-        "SP_HProxy":       -1.5,
-        "SP_HProxy_sw":    -0.5,
-        "PPOBC_HProxy":     0.5,
-        "PPOBC_HProxy_sw":  1.9,
-        "BC_HProxy":        2.9,
-        "BC_HProxy_sw":     3.9,
+        "SP_SP":           -3.0,
+        "SP_HProxy":       -2.0,
+        "SP_HProxy_sw":    -1.0,
+        "PPOBC_HProxy":     0.0,
+        "PPOBC_HProxy_sw":  1.0,
+        "BC_HProxy":        2.0,
+        "BC_HProxy_sw":     3.0,
     }
 
-    # hline x-extents span the full 7-bar group width per layout tick
-    # group spans from (ind - 2.9*width - width/2) to (ind + 3.9*width + width/2)
-    # rounded to match baseline: xmin = ind - 0.4, xmax = ind + 0.4 (relative)
+    # hline x-extents: cover the full group ± half a bar width on each side
+    # group spans ind + (-3.5 to +3.5)*width  =>  ind ± 0.42
+    half_group = 3.5 * width  # 0.42
     hline_spans = [
-        (-0.62, 0.88),   # cramped_room       (ind=0)
-        ( 0.38, 1.88),   # asymmetric_advantages (ind=1)
-        ( 1.38, 2.88),   # coordination_ring  (ind=2)
-        ( 2.38, 3.88),   # forced_coordination (ind=3)
-        ( 3.38, 4.88),   # counter_circuit    (ind=4)
+        (ind[i] - half_group, ind[i] + half_group)
+        for i in range(N)
     ]
 
-    plt.rc("legend", fontsize=15)
-    plt.rc("axes",   titlesize=25)
+    plt.rc("legend", fontsize=13)
+    plt.rc("axes",   titlesize=22)
 
-    fig, ax0 = plt.subplots(1, figsize=(11, 6))
-    ax0.tick_params(axis="x", labelsize=18)
-    ax0.tick_params(axis="y", labelsize=18.5)
+    # Wide enough that 7 bars × 5 groups have room to breathe
+    fig, ax0 = plt.subplots(1, figsize=(18, 6))
+    ax0.tick_params(axis="x", labelsize=16)
+    ax0.tick_params(axis="y", labelsize=16)
 
     # --- Primary solid bars ---
     for cond in CONDITION_ORDER:
-        if cond == "PPOBCtest":
-            continue
         delta  = DELTAS[cond]
         offset = ind + delta * width
         ys  = np.array([stats[layout][cond]["mean"] for layout in LAYOUT_ORDER])
@@ -263,7 +251,7 @@ def plot_figure_4a(
             error_kw=dict(ecolor="black", capsize=2, linewidth=1, zorder=4),
         )
 
-    # --- Switched (hatched) bars at their own separate delta offsets ---
+    # --- Switched (hatched) bars ---
     for cond in CONDITION_ORDER_SW:
         ys  = np.array([stats[layout][cond]["mean"] for layout in LAYOUT_ORDER])
         ses = np.array([stats[layout][cond]["se"]   for layout in LAYOUT_ORDER])
@@ -274,7 +262,6 @@ def plot_figure_4a(
         cfg = style[cond]
         ax0.bar(
             offset, ys, width,
-            # No label here — legend uses a single shared hatch patch below
             yerr=ses,
             facecolor=cfg["facecolor"],
             edgecolor=cfg["edgecolor"],
@@ -285,7 +272,7 @@ def plot_figure_4a(
             error_kw=dict(ecolor="black", capsize=2, linewidth=1, zorder=4),
         )
 
-    # --- Gold-standard hlines (red dashed) ---
+    # --- Gold-standard hlines (red dotted) ---
     for idx, layout in enumerate(LAYOUT_ORDER):
         gs = stats[layout].get("gold_standard")
         if gs is None:
@@ -302,22 +289,21 @@ def plot_figure_4a(
         )
 
     # --- Axes labels & title ---
-    ax0.set_ylabel("Average reward per episode")
+    ax0.set_ylabel("Average reward per episode", fontsize=16)
     ax0.set_title("Performance with human proxy model")
 
-    # x-ticks centred over the 7-bar group
-    # group centre = ind + ((-2.9 + 3.9) / 2) * width = ind + 0.5 * width
-    ax0.set_xticks(ind + 0.5 * width)
+    # x-ticks centred over the 7-bar group (centre delta = 0.0 -> ind + 0)
+    ax0.set_xticks(ind)
     ax0.set_xticklabels(LAYOUT_LABELS)
-    ax0.tick_params(axis="x", labelsize=18)
 
     ax0.set_ylim(0, YLIM.get(histtype, DEFAULT_YLIM))
 
+    # Pad x-axis so outermost bars aren't clipped
+    ax0.set_xlim(-0.6, N - 1 + 0.6)
+
     # --- Legend ---
-    # Collect handles/labels from the 4 solid bars
     handles, labels = ax0.get_legend_handles_labels()
 
-    # Add single "Switched start indices" hatch patch
     has_sw = any(
         not np.all(np.array([stats[lay][c]["mean"] for lay in LAYOUT_ORDER]) == 0)
         for c in CONDITION_ORDER_SW
@@ -331,9 +317,7 @@ def plot_figure_4a(
         handles.append(sw_patch)
         labels.append("Switched start indices")
 
-    # switch_indices(0, 1): swap SP+SP (pos 0) with SP+HProxy (pos 1)
-    # so legend reads: SP+HProxy, SP+SP, PPO_BC+HProxy, BC+HProxy, Switched...
-    # (matches baseline notebook handle reordering)
+    # Swap SP+SP (pos 0) with SP+HProxy (pos 1) to match baseline ordering
     handles = _switch_indices(0, 1, handles)
     labels  = _switch_indices(0, 1, labels)
 
