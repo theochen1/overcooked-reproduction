@@ -45,6 +45,8 @@ Evaluation notes
 - Evaluation uses sparse reward only (shaping = 0.0) and horizon = 400.
 - Policies are evaluated stochastically.
 - BC_test_0 vs BC_test_1 correspond to swapping player order in evaluation.
+- Each (condition, seed_idx) pair uses a unique RNG key so that evaluation
+  rollouts are independent across seeds, yielding meaningful standard errors.
 
 Debugging / progress logs
 -------------------------
@@ -111,6 +113,30 @@ _PPO_BC_SEEDS = {
     "bc_train": [9456, 1887, 5578, 5987, 516],
     "bc_test": [2888, 7424, 7360, 4467, 184],
 }
+
+# RNG offsets per condition — keep them well-separated so keys never collide
+# across (condition, seed_idx) pairs.
+_COND_RNG_OFFSET = {
+    "PPO_SP+PPO_SP":          0,
+    "PPO_SP+BC_test_0":       1000,
+    "PPO_SP+BC_test_1":       2000,
+    "PPO_BC_train+BC_test_0": 3000,
+    "PPO_BC_train+BC_test_1": 4000,
+    "PPO_BC_test+BC_test_0":  5000,
+    "PPO_BC_test+BC_test_1":  6000,
+    "BC_train+BC_test_0":     7000,
+    "BC_train+BC_test_1":     8000,
+}
+
+
+def _cond_rng(cond_name: str, seed_idx: int) -> jax.Array:
+    """Return a unique, reproducible RNG key for a given (condition, seed_idx) pair.
+
+    Using a unique key per (condition, seed_idx) ensures that evaluation
+    rollouts are independent across seeds, yielding non-zero standard errors.
+    """
+    offset = _COND_RNG_OFFSET[cond_name]
+    return jax.random.PRNGKey(offset + seed_idx)
 
 
 def _ts(t0: float) -> str:
@@ -304,8 +330,6 @@ def make_bc_act(params, terrain, *, stochastic: bool = True) -> Callable:
 
         # Stuck condition: same position AND same orientation for hist_len steps.
         # Matches TF ImitationAgentFromPolicy.is_stuck which uses pos_and_or.
-        # Checking position alone incorrectly flagged agents rotating in place
-        # (e.g. turning to face a counter), suppressing valid orientation actions.
         same_pos = np.all(_pos_hist == _pos_hist[:, :1, :], axis=(1, 2))
         same_or  = np.all(_or_hist  == _or_hist[:, :1],     axis=1)
         stuck_mask_np = (_filled >= hist_len) & same_pos & same_or
@@ -606,43 +630,43 @@ def main() -> None:
         "BC_train+BC_test_1": {},
     }
 
-    # BC baseline does not depend on PPO seeds; compute once and replicate.
-    rng = jax.random.PRNGKey(0)
-    v_bc0 = _timeit(
-        t0,
-        "eval_bc_baseline_0",
-        lambda: _eval_joint(
-            terrain,
-            bc_train_act,
-            bc_test_act,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
-        ),
-        num_envs=int(args.num_envs),
-        n_episodes=int(args.n_episodes),
-    )
-
-    rng = jax.random.PRNGKey(0)
-    v_bc1 = _timeit(
-        t0,
-        "eval_bc_baseline_1",
-        lambda: _eval_joint(
-            terrain,
-            bc_test_act,
-            bc_train_act,
-            rng=rng,
-            num_envs=args.num_envs,
-            horizon=horizon,
-            n_episodes=args.n_episodes,
-        ),
-        num_envs=int(args.num_envs),
-        n_episodes=int(args.n_episodes),
-    )
-
-    for seed_idx in range(len(sp_seeds) if args.seed is not None else n_seeds):
+    # BC baseline does not depend on PPO seeds, but we still use per-seed_idx RNG
+    # keys so that the replicated values reflect independent episode samples.
+    for seed_idx in range(n_seeds if args.seed is None else 1):
+        v_bc0 = _timeit(
+            t0,
+            "eval_bc_baseline_0",
+            lambda: _eval_joint(
+                terrain,
+                bc_train_act,
+                bc_test_act,
+                rng=_cond_rng("BC_train+BC_test_0", seed_idx),
+                num_envs=args.num_envs,
+                horizon=horizon,
+                n_episodes=args.n_episodes,
+            ),
+            num_envs=int(args.num_envs),
+            n_episodes=int(args.n_episodes),
+            seed_idx=seed_idx,
+        )
         raw_row["BC_train+BC_test_0"][seed_idx] = v_bc0
+
+        v_bc1 = _timeit(
+            t0,
+            "eval_bc_baseline_1",
+            lambda: _eval_joint(
+                terrain,
+                bc_test_act,
+                bc_train_act,
+                rng=_cond_rng("BC_train+BC_test_1", seed_idx),
+                num_envs=args.num_envs,
+                horizon=horizon,
+                n_episodes=args.n_episodes,
+            ),
+            num_envs=int(args.num_envs),
+            n_episodes=int(args.n_episodes),
+            seed_idx=seed_idx,
+        )
         raw_row["BC_train+BC_test_1"][seed_idx] = v_bc1
 
     # SP PPO
@@ -652,7 +676,6 @@ def main() -> None:
         _log(t0, "loaded_sp_ckpt", seed=int(seed), seed_idx=int(seed_idx), run_name=sp_name)
         sp_act = make_ppo_act(sp_params, stochastic=True)
 
-        rng = jax.random.PRNGKey(0)
         raw_row["PPO_SP+PPO_SP"][seed_idx] = _timeit(
             t0,
             "eval:PPO_SP+PPO_SP",
@@ -660,7 +683,7 @@ def main() -> None:
                 terrain,
                 sp_act,
                 sp_act,
-                rng=rng,
+                rng=_cond_rng("PPO_SP+PPO_SP", seed_idx),
                 num_envs=args.num_envs,
                 horizon=horizon,
                 n_episodes=args.n_episodes,
@@ -669,7 +692,6 @@ def main() -> None:
             seed_idx=int(seed_idx),
         )
 
-        rng = jax.random.PRNGKey(0)
         raw_row["PPO_SP+BC_test_0"][seed_idx] = _timeit(
             t0,
             "eval:PPO_SP+BC_test_0",
@@ -677,7 +699,7 @@ def main() -> None:
                 terrain,
                 sp_act,
                 bc_test_act,
-                rng=rng,
+                rng=_cond_rng("PPO_SP+BC_test_0", seed_idx),
                 num_envs=args.num_envs,
                 horizon=horizon,
                 n_episodes=args.n_episodes,
@@ -686,7 +708,6 @@ def main() -> None:
             seed_idx=int(seed_idx),
         )
 
-        rng = jax.random.PRNGKey(0)
         raw_row["PPO_SP+BC_test_1"][seed_idx] = _timeit(
             t0,
             "eval:PPO_SP+BC_test_1",
@@ -694,7 +715,7 @@ def main() -> None:
                 terrain,
                 bc_test_act,
                 sp_act,
-                rng=rng,
+                rng=_cond_rng("PPO_SP+BC_test_1", seed_idx),
                 num_envs=args.num_envs,
                 horizon=horizon,
                 n_episodes=args.n_episodes,
@@ -727,7 +748,6 @@ def main() -> None:
         _log(t0, "loaded_ppo_bc_train_ckpt", seed=int(seed), seed_idx=int(seed_idx), run_name=bc_name)
         bc_act = make_ppo_act(bc_params, stochastic=True)
 
-        rng = jax.random.PRNGKey(0)
         raw_row["PPO_BC_train+BC_test_0"][seed_idx] = _timeit(
             t0,
             "eval:PPO_BC_train+BC_test_0",
@@ -735,7 +755,7 @@ def main() -> None:
                 terrain,
                 bc_act,
                 bc_test_act,
-                rng=rng,
+                rng=_cond_rng("PPO_BC_train+BC_test_0", seed_idx),
                 num_envs=args.num_envs,
                 horizon=horizon,
                 n_episodes=args.n_episodes,
@@ -744,7 +764,6 @@ def main() -> None:
             seed_idx=int(seed_idx),
         )
 
-        rng = jax.random.PRNGKey(0)
         raw_row["PPO_BC_train+BC_test_1"][seed_idx] = _timeit(
             t0,
             "eval:PPO_BC_train+BC_test_1",
@@ -752,7 +771,7 @@ def main() -> None:
                 terrain,
                 bc_test_act,
                 bc_act,
-                rng=rng,
+                rng=_cond_rng("PPO_BC_train+BC_test_1", seed_idx),
                 num_envs=args.num_envs,
                 horizon=horizon,
                 n_episodes=args.n_episodes,
@@ -784,7 +803,6 @@ def main() -> None:
         _log(t0, "loaded_ppo_bc_test_ckpt", seed=int(seed), seed_idx=int(seed_idx), run_name=gs_name)
         gs_act = make_ppo_act(gs_params, stochastic=True)
 
-        rng = jax.random.PRNGKey(0)
         raw_row["PPO_BC_test+BC_test_0"][seed_idx] = _timeit(
             t0,
             "eval:PPO_BC_test+BC_test_0",
@@ -792,7 +810,7 @@ def main() -> None:
                 terrain,
                 gs_act,
                 bc_test_act,
-                rng=rng,
+                rng=_cond_rng("PPO_BC_test+BC_test_0", seed_idx),
                 num_envs=args.num_envs,
                 horizon=horizon,
                 n_episodes=args.n_episodes,
@@ -801,7 +819,6 @@ def main() -> None:
             seed_idx=int(seed_idx),
         )
 
-        rng = jax.random.PRNGKey(0)
         raw_row["PPO_BC_test+BC_test_1"][seed_idx] = _timeit(
             t0,
             "eval:PPO_BC_test+BC_test_1",
@@ -809,7 +826,7 @@ def main() -> None:
                 terrain,
                 bc_test_act,
                 gs_act,
-                rng=rng,
+                rng=_cond_rng("PPO_BC_test+BC_test_1", seed_idx),
                 num_envs=args.num_envs,
                 horizon=horizon,
                 n_episodes=args.n_episodes,
