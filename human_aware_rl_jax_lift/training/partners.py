@@ -85,15 +85,17 @@ class BCPartner:
         # states may be a batched OvercookedState pytree (new vec_env) or list
         # In either case we index per-env below.
         if hasattr(states, "timestep"):
-            # Batched pytree: extract per-env scalars via numpy indexing
-            timesteps = np.asarray(states.timestep, dtype=np.int32)
+            # Batched pytree: extract per-env arrays via numpy
+            timesteps = np.asarray(states.timestep,    dtype=np.int32)
             player_pos = np.asarray(states.player_pos, dtype=np.int32)
+            player_or  = np.asarray(states.player_or,  dtype=np.int32)
             num_envs = timesteps.shape[0]
         else:
             num_envs = len(states)
-            # List of states: runner passes materialized (numpy) states to avoid device syncs here
-            timesteps = np.array([int(st.timestep) for st in states], dtype=np.int32)
+            # List of states: runner passes materialized (numpy) states
+            timesteps  = np.array([int(st.timestep) for st in states], dtype=np.int32)
             player_pos = None
+            player_or  = None
 
         self._ensure_agents(num_envs)
         assert self._agents is not None
@@ -116,9 +118,11 @@ class BCPartner:
             other_idx = 1 - int(agent_idx[i])
             if player_pos is not None:
                 pos_xy = tuple(player_pos[i, other_idx].tolist())
+                or_val  = int(player_or[i, other_idx])
             else:
                 pos_xy = tuple(np.asarray(st_i.player_pos[other_idx]).tolist())
-            self._agents[i].update_history(pos_xy, int(act))
+                or_val  = int(np.asarray(st_i.player_or[other_idx]))
+            self._agents[i].update_history(pos_xy, or_val, int(act))
             actions[i] = int(act)
         return actions
 

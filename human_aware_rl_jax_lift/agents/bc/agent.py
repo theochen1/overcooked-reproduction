@@ -2,7 +2,7 @@
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, List, Tuple
+from typing import Deque, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -16,6 +16,7 @@ class BCAgent:
     stochastic: bool = True
     stuck_time: int = 3
     pos_history: Deque[Tuple[int, int]] = field(default_factory=lambda: deque(maxlen=4))
+    or_history: Deque[int] = field(default_factory=lambda: deque(maxlen=4))
     act_history: Deque[int] = field(default_factory=lambda: deque(maxlen=4))
 
     def action_probs(self, features: jnp.ndarray) -> jnp.ndarray:
@@ -29,15 +30,24 @@ class BCAgent:
             return int(jax.random.choice(rng, jnp.arange(probs.shape[0]), p=probs))
         return int(jnp.argmax(probs))
 
-    def update_history(self, position: Tuple[int, int], action: int) -> None:
+    def update_history(self, position: Tuple[int, int], orientation: int, action: int) -> None:
+        """Record position, orientation, and action for the stuck heuristic.
+
+        Orientation must be passed alongside position to match TF
+        ImitationAgentFromPolicy.is_stuck which checks pos_and_or. Tracking
+        position alone incorrectly flags agents that rotate in place (e.g.
+        turning to face a counter before interacting).
+        """
         self.pos_history.append(position)
+        self.or_history.append(orientation)
         self.act_history.append(action)
 
     def _unstuck_adjust(self, probs: jnp.ndarray) -> jnp.ndarray:
         if self.stuck_time <= 0 or len(self.pos_history) < self.stuck_time + 1:
             return probs
         same_pos = all(p == self.pos_history[0] for p in self.pos_history)
-        if not same_pos:
+        same_or  = all(o == self.or_history[0]  for o in self.or_history)
+        if not (same_pos and same_or):
             return probs
         blocked_actions = list(self.act_history)
         mask = jnp.ones_like(probs)
