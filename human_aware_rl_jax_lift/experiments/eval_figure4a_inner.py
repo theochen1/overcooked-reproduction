@@ -62,6 +62,11 @@ Legacy heuristic note
 The TF codebase used a small "unstuck" heuristic for BC: if the agent hasn't
 moved for `stuck_time` steps, block recently-taken actions and renormalize.
 We implement an equivalent heuristic in the vectorized BC actor below.
+
+Stuck detection matches TF ImitationAgentFromPolicy.is_stuck which checks
+pos_and_or (position AND orientation). JAX previously checked position only,
+causing agents that rotate in place (e.g. turning to face a counter) to be
+incorrectly flagged as stuck and have their orientation actions suppressed.
 """
 
 import argparse
@@ -209,6 +214,11 @@ def make_bc_act(params, terrain, *, stochastic: bool = True) -> Callable:
     We also include the legacy "unstuck" heuristic from BCAgent._unstuck_adjust:
     if the (other) player's position hasn't changed for `stuck_time` steps, block
     probability mass on recently-taken actions and renormalize.
+
+    Stuck detection matches TF ImitationAgentFromPolicy.is_stuck, which checks
+    pos_and_or (position AND orientation). Checking position alone caused agents
+    that rotate in place (e.g. turning to face a counter before interacting) to
+    be incorrectly flagged as stuck, suppressing their orientation actions.
     """
 
     model = BCPolicy()
@@ -219,6 +229,7 @@ def make_bc_act(params, terrain, *, stochastic: bool = True) -> Callable:
 
     # Stateful (host-side) per-env history buffers.
     _pos_hist: Optional[np.ndarray] = None  # (N, hist_len, 2)
+    _or_hist: Optional[np.ndarray] = None   # (N, hist_len)   — orientation
     _act_hist: Optional[np.ndarray] = None  # (N, hist_len)
     _filled: Optional[np.ndarray] = None  # (N,)
 
@@ -262,13 +273,14 @@ def make_bc_act(params, terrain, *, stochastic: bool = True) -> Callable:
         return a.astype(jnp.int32)
 
     def act(_obs_batch, rng: jax.Array, *, states, agent_idx):
-        nonlocal _pos_hist, _act_hist, _filled
+        nonlocal _pos_hist, _or_hist, _act_hist, _filled
 
         agent_idx_np = np.asarray(agent_idx, dtype=np.int32)
         n = int(agent_idx_np.shape[0])
 
         if _pos_hist is None or _pos_hist.shape[0] != n:
             _pos_hist = np.zeros((n, hist_len, 2), dtype=np.int32)
+            _or_hist  = np.zeros((n, hist_len),    dtype=np.int32)
             _act_hist = np.zeros((n, hist_len), dtype=np.int32)
             _filled = np.zeros((n,), dtype=np.int32)
 
@@ -277,17 +289,26 @@ def make_bc_act(params, terrain, *, stochastic: bool = True) -> Callable:
         reset_mask = timestep == 0
         if np.any(reset_mask):
             _pos_hist[reset_mask] = 0
+            _or_hist[reset_mask]  = 0
             _act_hist[reset_mask] = 0
             _filled[reset_mask] = 0
 
-        # Select the "other" physical player's position (mirrors BCPartner semantics).
+        # Select the "other" physical player's position and orientation.
+        # "other" here means the player this BC policy is controlling
+        # (mirrors BCPartner semantics where agent_idx is the *training* agent).
         other_idx = 1 - agent_idx_np
         player_pos = np.asarray(states.player_pos, dtype=np.int32)  # (N, 2, 2)
+        player_or  = np.asarray(states.player_or,  dtype=np.int32)  # (N, 2)
         pos_other = player_pos[np.arange(n), other_idx]  # (N, 2)
+        or_other  = player_or[np.arange(n),  other_idx]  # (N,)
 
-        # Stuck condition based on *previous* history (matches BCAgent timing).
+        # Stuck condition: same position AND same orientation for hist_len steps.
+        # Matches TF ImitationAgentFromPolicy.is_stuck which uses pos_and_or.
+        # Checking position alone incorrectly flagged agents rotating in place
+        # (e.g. turning to face a counter), suppressing valid orientation actions.
         same_pos = np.all(_pos_hist == _pos_hist[:, :1, :], axis=(1, 2))
-        stuck_mask_np = (_filled >= hist_len) & same_pos
+        same_or  = np.all(_or_hist  == _or_hist[:, :1],     axis=1)
+        stuck_mask_np = (_filled >= hist_len) & same_pos & same_or
 
         a = _act_jax(
             states,
@@ -298,10 +319,12 @@ def make_bc_act(params, terrain, *, stochastic: bool = True) -> Callable:
         )
         a_np = np.asarray(a, dtype=np.int32)
 
-        # Update histories with current position + chosen action.
+        # Update histories with current position, orientation + chosen action.
         _pos_hist[:, :-1, :] = _pos_hist[:, 1:, :]
+        _or_hist[:, :-1]     = _or_hist[:, 1:]
         _act_hist[:, :-1] = _act_hist[:, 1:]
         _pos_hist[:, -1, :] = pos_other
+        _or_hist[:, -1]     = or_other
         _act_hist[:, -1] = a_np
         _filled = np.minimum(_filled + 1, hist_len)
 
