@@ -23,8 +23,8 @@ python experiments/prepare_results.py \
   --out experiments/results_figure4a.json
 
 
-# Plot BEST seed (max over seed index) instead of mean over seeds.
+# Plot mean over seeds with standard error bars.
 python experiments/figure4a.py \
   --results_path experiments/results_figure4a.json \
-  --seed_agg best \
+  --seed_agg mean \
   --output experiments/figure_4a.png
