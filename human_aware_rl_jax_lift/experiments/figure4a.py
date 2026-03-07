@@ -32,7 +32,8 @@ LAYOUT_LABELS = [
 ]
 
 # Bar order (left to right within each layout group):
-#   SP+SP, SP+HProxy, SP+HProxy_sw, PPO_BC+HProxy, PPO_BC+HProxy_sw, BC+HProxy, BC+HProxy_sw
+#   SP+SP, SP+HProxy, PPOBC+HProxy, BC+HProxy,
+#   SP+HProxy_sw, PPOBC+HProxy_sw, BC+HProxy_sw
 CONDITION_ORDER = [
     "SP_SP",
     "SP_HProxy",
@@ -174,10 +175,16 @@ def plot_figure_4a(
     output_path: Path,
     histtype: str = "humanai",
 ) -> None:
-    """Produce the grouped bar chart faithful to the NeurIPS baseline.
+    """Produce the grouped bar chart.
 
-    Bar layout (7 bars per layout group):
-      SP+SP, SP+HProxy, SP+HProxy_sw, PPO_BC+HProxy, PPO_BC+HProxy_sw, BC+HProxy, BC+HProxy_sw
+    Bar order left-to-right within each layout group:
+      -3: SP+SP
+      -2: SP+HProxy        (solid teal)
+      -1: PPOBC+HProxy     (solid orange)
+       0: BC+HProxy        (solid gray)
+      +1: SP+HProxy_sw     (hatched teal)
+      +2: PPOBC+HProxy_sw  (hatched orange)
+      +3: BC+HProxy_sw     (hatched gray)
 
     Gold-standard reference line drawn as red dotted hline.
     Legend uses single 'Switched start indices' hatch patch.
@@ -197,26 +204,21 @@ def plot_figure_4a(
     }
 
     N     = 5
-    # width=0.12 means 7 bars span 6.8*0.12 = 0.816 units, well within the
-    # 1-unit spacing between layout groups so bars never overlap.
     width = 0.12
     ind   = np.arange(N)
 
-    # 7-bar deltas (unitless multiples of `width`).
-    # Centre of the 7-bar group = mean(-3, -2, -1, 0, 1, 2, 3) = 0.0
-    # Outermost bars at ±3 -> group spans ±3.5*width = ±0.42 around each tick.
+    # All 4 neutrals first, then all 3 switched — each group spans
+    # deltas -3..+3 (7 bars), centre = 0.0, outermost at ±3.5*width = ±0.42.
     DELTAS = {
         "SP_SP":           -3.0,
         "SP_HProxy":       -2.0,
-        "SP_HProxy_sw":    -1.0,
-        "PPOBC_HProxy":     0.0,
-        "PPOBC_HProxy_sw":  1.0,
-        "BC_HProxy":        2.0,
+        "PPOBC_HProxy":    -1.0,
+        "BC_HProxy":        0.0,
+        "SP_HProxy_sw":     1.0,
+        "PPOBC_HProxy_sw":  2.0,
         "BC_HProxy_sw":     3.0,
     }
 
-    # hline x-extents: cover the full group ± half a bar width on each side
-    # group spans ind + (-3.5 to +3.5)*width  =>  ind ± 0.42
     half_group = 3.5 * width  # 0.42
     hline_spans = [
         (ind[i] - half_group, ind[i] + half_group)
@@ -226,7 +228,6 @@ def plot_figure_4a(
     plt.rc("legend", fontsize=13)
     plt.rc("axes",   titlesize=22)
 
-    # Wide enough that 7 bars × 5 groups have room to breathe
     fig, ax0 = plt.subplots(1, figsize=(18, 6))
     ax0.tick_params(axis="x", labelsize=16)
     ax0.tick_params(axis="y", labelsize=16)
@@ -292,13 +293,11 @@ def plot_figure_4a(
     ax0.set_ylabel("Average reward per episode", fontsize=16)
     ax0.set_title("Performance with human proxy model")
 
-    # x-ticks centred over the 7-bar group (centre delta = 0.0 -> ind + 0)
+    # x-ticks centred over the 7-bar group (centre delta = 0.0 -> BC_HProxy at ind+0)
     ax0.set_xticks(ind)
     ax0.set_xticklabels(LAYOUT_LABELS)
 
     ax0.set_ylim(0, YLIM.get(histtype, DEFAULT_YLIM))
-
-    # Pad x-axis so outermost bars aren't clipped
     ax0.set_xlim(-0.6, N - 1 + 0.6)
 
     # --- Legend ---
@@ -316,10 +315,6 @@ def plot_figure_4a(
         )
         handles.append(sw_patch)
         labels.append("Switched start indices")
-
-    # Swap SP+SP (pos 0) with SP+HProxy (pos 1) to match baseline ordering
-    handles = _switch_indices(0, 1, handles)
-    labels  = _switch_indices(0, 1, labels)
 
     ax0.legend(handles=handles, labels=labels, loc="best")
 
