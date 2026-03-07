@@ -15,6 +15,8 @@ Patch note (2026-03):
 - Record and print metadata whenever a new "best" checkpoint is saved, including
   sp_factor at that time. This helps diagnose whether the best checkpoint was
   selected under self-play mixing.
+- Save a separate `best_after_sp_anneal/` checkpoint that only competes once
+  sp_factor == 0.0, avoiding confounding from self-play mixing at selection time.
 """
 
 import pickle
@@ -271,6 +273,7 @@ def ppo_run(
             "sp_factor": [],
             "shaping_factor": [],
             "best_events": [],
+            "best_after_sp_anneal_events": [],
             "loss": [],
             "policy_loss": [],
             "value_loss": [],
@@ -281,6 +284,9 @@ def ppo_run(
         }
         probe_obs = None
         best_sparse = float("-inf")
+        # Tracks the best sparse reward seen *only* when sp_factor == 0.0.
+        # The checkpoint saved here is not confounded by self-play mixing.
+        best_sparse_post_sp = float("-inf")
         total_steps = 0
         t_start = time.time()
         eprew_buffer = deque(maxlen=100)
@@ -400,6 +406,7 @@ def ppo_run(
             sp_factor = compute_self_play_factor(total_steps, self_play_horizon)
             print(f"Current reward shaping {shaping_factor:.4f}")
 
+            # --- Unconditional best (may include self-play mixing phase) ---
             if ep_sparse > best_sparse:
                 best_sparse = ep_sparse
                 save_ppo_checkpoint(train_state.params, seed_dir / "best")
@@ -419,11 +426,32 @@ def ppo_run(
                 )
                 sys.stdout.flush()
 
+            # --- Post-SP-anneal best: only compete once sp_factor is exactly 0 ---
+            if sp_factor == 0.0 and ep_sparse > best_sparse_post_sp:
+                best_sparse_post_sp = ep_sparse
+                save_ppo_checkpoint(train_state.params, seed_dir / "best_after_sp_anneal")
+                event_post = {
+                    "update": int(update + 1),
+                    "total_timesteps": int(total_steps),
+                    "ep_sparse_rew_mean": float(ep_sparse),
+                    "eprewmean": float(eprewmean),
+                    "sp_factor": float(sp_factor),
+                    "shaping_factor": float(logs["shaping_factor"][-1]),
+                }
+                logs["best_after_sp_anneal_events"].append(event_post)
+                print(
+                    f"[{_ts(t0)}] Saved BEST_AFTER_SP_ANNEAL checkpoint at update={event_post['update']} "
+                    f"timesteps={event_post['total_timesteps']} ep_sparse={event_post['ep_sparse_rew_mean']:.4f} "
+                    f"shaping={event_post['shaping_factor']:.4f}"
+                )
+                sys.stdout.flush()
+
         save_ppo_checkpoint(train_state.params, seed_dir / "ppo_agent")
         save_training_info(logs, seed_dir / "training_info.pkl")
         summaries.append({
             "seed": seed,
             "best_sparse_rew_mean": best_sparse,
+            "best_after_sp_anneal_sparse_rew_mean": best_sparse_post_sp,
             "final_eprewmean": logs["eprewmean"][-1] if logs["eprewmean"] else 0.0,
             "final_ep_sparse_rew_mean": logs["ep_sparse_rew_mean"][-1] if logs["ep_sparse_rew_mean"] else 0.0,
             "seed_dir": str(seed_dir),

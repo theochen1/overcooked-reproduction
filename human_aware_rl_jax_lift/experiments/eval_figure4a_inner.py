@@ -31,9 +31,12 @@ Key notebook-faithful behaviors
     ppo_bc_seeds["bc_train"] = [9456, 1887, 5578, 5987, 516]
     ppo_bc_seeds["bc_test"]  = [2888, 7424, 7360, 4467, 184]
 
-- Checkpoint semantics (as in the notebook):
+- Checkpoint semantics:
     SP PPO           -> best (fallback to final if best missing)
-    PPO_BC train/test-> final (fallback to best if final missing)
+    PPO_BC train/test-> best_after_sp_anneal (fallback to final if missing)
+                        This picks the best checkpoint recorded only after
+                        self-play has been fully annealed to zero, so the
+                        selection is not confounded by self-play mixing.
 
 - Preserves the two gold-standard reference lines separately:
     PPO_BC_test+BC_test_0 and PPO_BC_test+BC_test_1
@@ -179,6 +182,7 @@ def _load_ppo_params(
     seed_dir = ppo_runs_dir / run_name / f"seed{seed}"
     best_dir = seed_dir / "best"
     final_dir = seed_dir / "ppo_agent"
+    post_sp_dir = seed_dir / "best_after_sp_anneal"
 
     def _try(dir_: Path):
         p = dir_ / "params.pkl"
@@ -188,20 +192,28 @@ def _load_ppo_params(
             payload = pickle.load(f)
         return payload.get("params", payload) if isinstance(payload, dict) else payload
 
-    if ckpt not in ("best", "final"):
-        raise ValueError(f"Invalid ckpt='{ckpt}'. Expected 'best' or 'final'.")
+    if ckpt not in ("best", "final", "best_after_sp_anneal"):
+        raise ValueError(f"Invalid ckpt='{ckpt}'. Expected 'best', 'final', or 'best_after_sp_anneal'.")
 
-    # Notebook semantics:
-    # - SP uses ckpt='best' -> try best then final
-    # - PPO_BC uses ckpt='final' -> try final then best
     if ckpt == "best":
+        # SP semantics: prefer best, fall back to final
         out = _try(best_dir)
         if out is not None:
             return out
         out = _try(final_dir)
         if out is not None:
             return out
-    else:
+
+    elif ckpt == "best_after_sp_anneal":
+        # PPO_BC semantics: prefer post-SP-anneal best, fall back to final
+        out = _try(post_sp_dir)
+        if out is not None:
+            return out
+        out = _try(final_dir)
+        if out is not None:
+            return out
+
+    else:  # ckpt == "final"
         out = _try(final_dir)
         if out is not None:
             return out
@@ -211,7 +223,8 @@ def _load_ppo_params(
 
     raise FileNotFoundError(
         f"Could not find PPO params for {run_name}/seed{seed} with ckpt='{ckpt}'. "
-        f"Looked for {best_dir/'params.pkl'} and {final_dir/'params.pkl'}."
+        f"Looked for {post_sp_dir/'params.pkl'}, {best_dir/'params.pkl'}, "
+        f"and {final_dir/'params.pkl'}."
     )
 
 
@@ -549,16 +562,21 @@ def main() -> None:
         "--sp_ckpt",
         type=str,
         default="best",
-        choices=["best", "final"],
+        choices=["best", "final", "best_after_sp_anneal"],
         help="SP PPO checkpoint preference (default: best, matches notebook).",
     )
 
     parser.add_argument(
         "--bc_ckpt",
         type=str,
-        default="final",
-        choices=["best", "final"],
-        help="PPO_BC train/test checkpoint preference (default: final, matches notebook).",
+        default="best_after_sp_anneal",
+        choices=["best", "final", "best_after_sp_anneal"],
+        help=(
+            "PPO_BC train/test checkpoint preference "
+            "(default: best_after_sp_anneal — picks the best checkpoint recorded only "
+            "after self-play has been fully annealed to zero, avoiding confounding from "
+            "self-play mixing at selection time; falls back to final if missing)."
+        ),
     )
 
     args = parser.parse_args()
