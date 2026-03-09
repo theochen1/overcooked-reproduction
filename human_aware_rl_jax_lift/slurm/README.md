@@ -13,10 +13,10 @@ This directory contains the full batch suite for Overcooked reproduction on Enga
 
 ## Assumptions
 
-- Run from module root: `human_aware_rl_jax_lift`.
+- Run from repo root (parent of `slurm/`); working directory is `human_aware_rl_jax_lift` when jobs execute.
 - Conda env exists and is named `overcooked`.
-- Required data exists under `data/bc_data/`.
-- Cluster supports requested partitions/QOS/GRES (notably `gpu:h200:1`).
+- BC data: `data/bc_data/{simple,unident_s,random0,random1,random3}.pkl` exist. Create them with `python scripts/prepare_bc_data.py` (requires `human_aware_rl` human trajectory data).
+- Cluster supports requested partitions/QOS/GRES.
 
 ## Preflight
 

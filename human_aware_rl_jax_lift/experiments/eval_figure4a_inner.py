@@ -533,13 +533,6 @@ def main() -> None:
         help="How many seeds from each notebook seed family to evaluate (default: 5).",
     )
 
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Optional debug override: if set, evaluates only this raw seed for all PPO families.",
-    )
-
     parser.add_argument("--ppo_runs_dir", type=str, default=str(default_data_dir / "ppo_runs"))
 
     parser.add_argument(
@@ -588,7 +581,6 @@ def main() -> None:
         n_episodes=int(args.n_episodes),
         num_envs=int(args.num_envs),
         num_seeds=int(args.num_seeds),
-        seed_override=args.seed,
         sp_ckpt=args.sp_ckpt,
         bc_ckpt=args.bc_ckpt,
         ppo_runs_dir=args.ppo_runs_dir,
@@ -625,14 +617,9 @@ def main() -> None:
     ppo_bc_train_runs = (f"ppo_bc_train_{layout}", f"ppo_bc_{layout}")
     ppo_bc_test_runs = (f"ppo_bc_test_{layout}", f"ppo_bc_test_{layout}_v0")
 
-    if args.seed is not None:
-        sp_seeds = [int(args.seed)]
-        bc_train_seeds = [int(args.seed)]
-        bc_test_seeds = [int(args.seed)]
-    else:
-        sp_seeds = _ensure_seed_list(_PPO_SP_SEEDS, n_seeds, name="PPO_SP")
-        bc_train_seeds = _ensure_seed_list(_PPO_BC_SEEDS["bc_train"], n_seeds, name="PPO_BC_train")
-        bc_test_seeds = _ensure_seed_list(_PPO_BC_SEEDS["bc_test"], n_seeds, name="PPO_BC_test")
+    sp_seeds = _ensure_seed_list(_PPO_SP_SEEDS, n_seeds, name="PPO_SP")
+    bc_train_seeds = _ensure_seed_list(_PPO_BC_SEEDS["bc_train"], n_seeds, name="PPO_BC_train")
+    bc_test_seeds = _ensure_seed_list(_PPO_BC_SEEDS["bc_test"], n_seeds, name="PPO_BC_test")
 
     _log(t0, "seed_families", sp_seeds=sp_seeds, bc_train_seeds=bc_train_seeds, bc_test_seeds=bc_test_seeds)
 
@@ -650,7 +637,7 @@ def main() -> None:
 
     # BC baseline does not depend on PPO seeds, but we still use per-seed_idx RNG
     # keys so that the replicated values reflect independent episode samples.
-    for seed_idx in range(n_seeds if args.seed is None else 1):
+    for seed_idx in range(n_seeds):
         v_bc0 = _timeit(
             t0,
             "eval_bc_baseline_0",

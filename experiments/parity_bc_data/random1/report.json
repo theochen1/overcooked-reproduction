@@ -1,0 +1,68 @@
+{
+  "layout": "random1",
+  "tf_train_npz": "/home/tchen22/overcooked-reproduction/experiments/parity_bc_data/random1/tf_train_expert.npz",
+  "tf_test_npz": "/home/tchen22/overcooked-reproduction/experiments/parity_bc_data/random1/tf_test_expert.npz",
+  "jax_pkl": "/orcd/home/002/tchen22/overcooked-reproduction/human_aware_rl_jax_lift/data/bc_data/random1.pkl",
+  "tf_train": {
+    "has_actions": true,
+    "n_samples": 19238,
+    "actions_hist": {
+      "0": 2081,
+      "1": 2044,
+      "2": 1951,
+      "3": 2077,
+      "4": 9808,
+      "5": 1277
+    },
+    "obs_shape": [
+      19238,
+      62
+    ]
+  },
+  "tf_test": {
+    "has_actions": true,
+    "n_samples": 19124,
+    "actions_hist": {
+      "0": 2130,
+      "1": 2084,
+      "2": 2104,
+      "3": 2178,
+      "4": 9351,
+      "5": 1277
+    },
+    "obs_shape": [
+      19124,
+      62
+    ]
+  },
+  "jax_train": {
+    "n_samples": 19238,
+    "feat_shape": [
+      19238,
+      64
+    ],
+    "actions_hist": {
+      "0": 2081,
+      "1": 2044,
+      "2": 1951,
+      "3": 2077,
+      "4": 9808,
+      "5": 1277
+    }
+  },
+  "jax_test": {
+    "n_samples": 19124,
+    "feat_shape": [
+      19124,
+      64
+    ],
+    "actions_hist": {
+      "0": 2130,
+      "1": 2084,
+      "2": 2104,
+      "3": 2178,
+      "4": 9351,
+      "5": 1277
+    }
+  }
+}

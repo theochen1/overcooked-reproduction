@@ -1,0 +1,27 @@
+{
+  "layout": "simple",
+  "data_path": "/home/tchen22/overcooked-reproduction/human_aware_rl/human_aware_rl/data/human/anonymized/clean_test_trials.pkl",
+  "out_npz": "/home/tchen22/overcooked-reproduction/experiments/parity_bc_data/simple/tf_test_expert.npz",
+  "sha256": "2a0e527c038e623d1faccd6a5afbf10fc82ec0d0f49360630901f99b17672ba6",
+  "keys": [
+    "actions",
+    "episode_returns",
+    "episode_starts",
+    "obs",
+    "rewards"
+  ],
+  "obs_shape": [
+    19252,
+    62
+  ],
+  "obs_dtype": "float64",
+  "n_samples": 19252,
+  "actions_hist": {
+    "0": 1063,
+    "1": 642,
+    "2": 1171,
+    "3": 1140,
+    "4": 13683,
+    "5": 1553
+  }
+}
