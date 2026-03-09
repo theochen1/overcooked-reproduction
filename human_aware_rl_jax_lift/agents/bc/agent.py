@@ -9,6 +9,10 @@ import jax.numpy as jnp
 
 from .model import BCPolicy
 
+# Action indices matching paper_config.yaml order:
+# 0=north, 1=south, 2=east, 3=west, 4=stay, 5=interact
+_MOVEMENT_ACTIONS = frozenset({0, 1, 2, 3})
+
 
 @dataclass
 class BCAgent:
@@ -49,7 +53,16 @@ class BCAgent:
         same_or  = all(o == self.or_history[0]  for o in self.or_history)
         if not (same_pos and same_or):
             return probs
-        blocked_actions = list(self.act_history)
+
+        blocked_actions = set(self.act_history)
+
+        # Mirror TF's assertion: skip adjustment entirely if no movement
+        # direction would remain unblocked after masking. This matches:
+        #   assert any([a not in last_actions for a in Direction.ALL_DIRECTIONS])
+        # in ImitationAgentFromPolicy.unblock_if_stuck.
+        if _MOVEMENT_ACTIONS.issubset(blocked_actions):
+            return probs
+
         mask = jnp.ones_like(probs)
         for a in blocked_actions:
             mask = mask.at[a].set(0.0)
