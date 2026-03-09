@@ -18,6 +18,7 @@ class BCTrainConfig:
     learning_rate: float = 1e-3
     adam_eps: float = 1e-8
     batch_size: int = 64
+    train_fraction: float = 0.85
 
 
 def create_train_state(rng, input_dim: int, config: BCTrainConfig) -> TrainState:
@@ -40,16 +41,54 @@ def train_step(state: TrainState, x: jnp.ndarray, y: jnp.ndarray):
     return next_state, {"loss": loss, "acc": acc}
 
 
+@jax.jit
+def val_loss(params, apply_fn, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+    logits = apply_fn(params, x)
+    return optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
+
+
 def train_bc(features: jnp.ndarray, labels: jnp.ndarray, rng, config: BCTrainConfig) -> Dict[str, object]:
-    """Train BC policy from feature/label tensors."""
-    state = create_train_state(rng, features.shape[-1], config)
+    """Train BC policy from feature/label tensors.
+
+    Mirrors TF behavioural_cloning.py:
+    - 85/15 train/val split (train_fraction=0.85)
+    - Evaluates val loss after every epoch
+    - Returns params from the epoch with lowest val loss (not final epoch)
+    - Shuffle is driven by the provided JAX rng key for reproducibility
+    """
     n = features.shape[0]
-    for _ in range(config.num_epochs):
-        perm = np.random.permutation(n)
-        features_epoch = features[perm]
-        labels_epoch = labels[perm]
-        for i in range(0, n, config.batch_size):
-            xb = features_epoch[i : i + config.batch_size]
-            yb = labels_epoch[i : i + config.batch_size]
+    n_train = int(n * config.train_fraction)
+
+    # Shuffle once with JAX rng before splitting so val set is random
+    rng, split_rng, init_rng = jax.random.split(rng, 3)
+    perm = jax.random.permutation(split_rng, n)
+    features = features[perm]
+    labels = labels[perm]
+
+    x_train, x_val = features[:n_train], features[n_train:]
+    y_train, y_val = labels[:n_train], labels[n_train:]
+
+    state = create_train_state(init_rng, features.shape[-1], config)
+
+    best_val_loss = float("inf")
+    best_params = state.params
+
+    for epoch in range(config.num_epochs):
+        # Per-epoch shuffle of training set using a derived key
+        rng, epoch_rng = jax.random.split(rng)
+        epoch_perm = jax.random.permutation(epoch_rng, n_train)
+        x_epoch = x_train[epoch_perm]
+        y_epoch = y_train[epoch_perm]
+
+        for i in range(0, n_train, config.batch_size):
+            xb = x_epoch[i : i + config.batch_size]
+            yb = y_epoch[i : i + config.batch_size]
             state, _ = train_step(state, xb, yb)
-    return {"state": state}
+
+        # Evaluate on validation set and checkpoint if best so far
+        epoch_val_loss = float(val_loss(state.params, state.apply_fn, x_val, y_val))
+        if epoch_val_loss < best_val_loss:
+            best_val_loss = epoch_val_loss
+            best_params = state.params
+
+    return {"params": best_params, "best_val_loss": best_val_loss}
