@@ -41,12 +41,6 @@ def train_step(state: TrainState, x: jnp.ndarray, y: jnp.ndarray):
     return next_state, {"loss": loss, "acc": acc}
 
 
-@jax.jit
-def val_loss(params, apply_fn, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
-    logits = apply_fn(params, x)
-    return optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
-
-
 def train_bc(features: jnp.ndarray, labels: jnp.ndarray, rng, config: BCTrainConfig) -> Dict[str, object]:
     """Train BC policy from feature/label tensors.
 
@@ -70,6 +64,15 @@ def train_bc(features: jnp.ndarray, labels: jnp.ndarray, rng, config: BCTrainCon
 
     state = create_train_state(init_rng, features.shape[-1], config)
 
+    # Close over BCPolicy().apply (a pure function) so jit can trace it.
+    # Passing state.apply_fn (a bound method) as a traced arg fails.
+    _apply = BCPolicy().apply
+
+    @jax.jit
+    def _val_loss(params, x, y):
+        logits = _apply(params, x)
+        return optax.softmax_cross_entropy_with_integer_labels(logits, y).mean()
+
     best_val_loss = float("inf")
     best_params = state.params
 
@@ -86,7 +89,7 @@ def train_bc(features: jnp.ndarray, labels: jnp.ndarray, rng, config: BCTrainCon
             state, _ = train_step(state, xb, yb)
 
         # Evaluate on validation set and checkpoint if best so far
-        epoch_val_loss = float(val_loss(state.params, state.apply_fn, x_val, y_val))
+        epoch_val_loss = float(_val_loss(state.params, x_val, y_val))
         if epoch_val_loss < best_val_loss:
             best_val_loss = epoch_val_loss
             best_params = state.params
