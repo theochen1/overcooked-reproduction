@@ -8,6 +8,7 @@ from typing import Any, Tuple
 import jax.numpy as jnp
 import numpy as np
 
+from human_aware_rl_jax_lift.agents.bc.model import BCPolicy
 from human_aware_rl_jax_lift.agents.bc.train import BCTrainConfig, train_bc
 from human_aware_rl_jax_lift.reproducibility.seed import set_global_seed
 from human_aware_rl_jax_lift.training.checkpoints import load_best_bc_model_paths, save_bc_checkpoint, save_best_bc_model_paths
@@ -97,8 +98,9 @@ def _train_single_seed(
         rng=rng,
         config=cfg,
     )
-    params = out["state"].params
-    logits = out["state"].apply_fn(params, jnp.asarray(features, dtype=jnp.float32))
+    # train_bc now returns {"params": best_params, "best_val_loss": float}
+    params = out["params"]
+    logits = BCPolicy().apply(params, jnp.asarray(features, dtype=jnp.float32))
     acc = float((jnp.argmax(logits, axis=-1) == jnp.asarray(actions)).mean())
     metadata = {
         "bc_params": {
@@ -107,10 +109,14 @@ def _train_single_seed(
             "learning_rate": float(lr),
             "adam_eps": float(adam_eps),
         },
-        "train_info": {"train_accuracy": acc, "num_samples": int(features.shape[0])},
+        "train_info": {
+            "train_accuracy": acc,
+            "best_val_loss": float(out["best_val_loss"]),
+            "num_samples": int(features.shape[0]),
+        },
     }
     save_bc_checkpoint(params, metadata, run_dir)
-    return {"run_dir": str(run_dir), "train_accuracy": acc}
+    return {"run_dir": str(run_dir), "train_accuracy": acc, "best_val_loss": float(out["best_val_loss"])}
 
 
 def main() -> None:
@@ -181,6 +187,7 @@ def main() -> None:
             "num_models": len(summaries),
             "best_seed_idx": best_idx,
             "best_train_accuracy": best_acc,
+            "best_val_loss": min(s["best_val_loss"] for s in summaries),
             "best_model_path": best_map[args.split][args.layout],
         }
     )
