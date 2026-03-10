@@ -14,8 +14,8 @@ from .model import BCPolicy
 
 @dataclass
 class BCTrainConfig:
-    num_epochs: int = 100
-    learning_rate: float = 1e-3
+    num_epochs: int = 1000   # TF default: num_epochs=1000 in train_bc_agent()
+    learning_rate: float = 1e-4  # TF default: lr=1e-4 in train_bc_agent()
     adam_eps: float = 1e-8
     batch_size: int = 64
     train_fraction: float = 0.85
