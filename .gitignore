@@ -51,14 +51,6 @@ overcooked/
 **/.claude/
 CLAUDE.md
 
-# ---------------------------------------------------------------------------
-# Generated experiment outputs (reproducible via eval/plot scripts)
-# ---------------------------------------------------------------------------
-human_aware_rl_jax_lift/experiments/eval_results/
-human_aware_rl_jax_lift/experiments/*.png
-human_aware_rl_jax_lift/experiments/results_figure4a.json
-human_aware_rl_jax_lift/data/*.png
-
 # Root-level parity artifacts (dev-only)
 experiments/parity_bc_data/
 parity_artifacts/
