@@ -1,0 +1,91 @@
+# Frozen paper-faithful constants for training/evaluation.
+# Treat this file as immutable ground truth for reproducibility audits.
+
+# tf_compat: when true, replicate known TF bugs (dict.update in PPO obs,
+# BC featurization quirks, synchronized agent_idx) for exact TF parity.
+# Set to false for the "ideal" bug-free implementation.
+tf_compat: true
+
+environment:
+  horizon: 400
+  reward_delivery: 20
+  cook_time: 20
+  num_items_for_soup: 3
+  action_space:
+    - north
+    - south
+    - east
+    - west
+    - stay
+    - interact
+  layouts:
+    - simple
+    - unident_s
+    - random0
+    - random1
+    - random3
+
+network:
+  activation: leaky_relu    # tf.nn.leaky_relu alpha=0.2 (TF default)
+  leaky_relu_alpha: 0.2
+  conv_filters: 25
+  conv_layers:
+    - {kernel: [5, 5], padding: SAME}
+    - {kernel: [3, 3], padding: SAME}
+    - {kernel: [3, 3], padding: VALID}
+  fc_layers: 3
+  hidden_dim: 32
+
+ppo_defaults:
+  num_envs: 30
+  horizon: 400
+  num_minibatches: 6
+  num_epochs: 8
+  learning_rate: 1.0e-3
+  gamma: 0.99
+  gae_lambda: 0.98
+  clip_eps: 0.05
+  entropy_coef: 0.01
+  value_coef: 0.5
+  max_grad_norm: 0.1
+
+# PPO SP: layout-specific hyperparams + env timestep budget (Fig. 8, page 14).
+# randomize_agent_idx: true so training agent is P0 or P1 at random each episode.
+ppo_sp_layout_overrides:
+  simple:    {learning_rate: 1.0e-3, value_coef: 0.1, rew_shaping_horizon: 2500000, total_timesteps: 6000000, randomize_agent_idx: true}
+  unident_s: {learning_rate: 1.0e-3, value_coef: 0.1, rew_shaping_horizon: 2500000, total_timesteps: 7000000, randomize_agent_idx: true}
+  random1:   {learning_rate: 6.0e-4, value_coef: 0.1, rew_shaping_horizon: 3500000, total_timesteps: 10000000, randomize_agent_idx: true}
+  random0:   {learning_rate: 8.0e-4, value_coef: 0.1, rew_shaping_horizon: 2500000, total_timesteps: 7500000, randomize_agent_idx: true}
+  random3:   {learning_rate: 8.0e-4, value_coef: 0.1, rew_shaping_horizon: 2500000, total_timesteps: 8000000, randomize_agent_idx: true}
+
+# PPO BC: randomize_agent_idx: true (TF randomizes via np.random.choice at every reset).
+ppo_bc_layout_overrides:
+  simple:    {learning_rate: 1.0e-3, lr_annealing: 3.0, value_coef: 0.04, num_minibatches: 10, rew_shaping_horizon: 1000000,  self_play_horizon: [500000,  3000000], randomize_agent_idx: true}
+  unident_s: {learning_rate: 1.0e-3, lr_annealing: 3.0, value_coef: 0.05, num_minibatches: 12, rew_shaping_horizon: 6000000,  self_play_horizon: [1000000, 7000000], randomize_agent_idx: true}
+  random1:   {learning_rate: 1.0e-3, lr_annealing: 1.5, value_coef: 0.05, num_minibatches: 15, rew_shaping_horizon: 5000000,  self_play_horizon: [2000000, 6000000], randomize_agent_idx: true}
+  random0:   {learning_rate: 1.5e-3, lr_annealing: 2.0, value_coef: 0.01, num_minibatches: 15, rew_shaping_horizon: 4000000,  self_play_horizon: null, randomize_agent_idx: true}
+  random3:   {learning_rate: 1.5e-3, lr_annealing: 3.0, value_coef: 0.01, num_minibatches: 15, rew_shaping_horizon: 4000000,  self_play_horizon: [1000000, 4000000], randomize_agent_idx: true}
+
+pbt_defaults:
+  num_envs: 50
+  population_size: 3
+  mutation_probability: 0.33
+  mutation_factors: [0.75, 1.25]
+  iter_per_selection: 9
+  num_selection_games: 6
+
+# BC human-model training config.
+# Paper collects 16 human-human trajectories per layout ≈ 9K single-agent
+# transitions per BC split. 1e-3 Adam, 100 epochs, batch 64 matches the
+# original HumanCompatibleAI codebase scale for this data size.
+bc:
+  learning_rate: 1.0e-3
+  num_epochs: 100
+  batch_size: 64
+  adam_eps: 1.0e-8
+
+seeds:
+  bc:           [5415, 2652, 6440, 1965, 6647]
+  ppo_sp:       [2229, 7649, 7225, 9807, 386]
+  ppo_bc_train: [9456, 1887, 5578, 5987, 516]
+  ppo_bc_test:  [2888, 7424, 7360, 4467, 184]

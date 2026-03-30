@@ -1,0 +1,67 @@
+{
+  "SP+SP_simple_best": {
+    "seeds": [
+      2229,
+      7649,
+      7225,
+      9807,
+      386
+    ],
+    "num_games_per_seed": 100,
+    "per_seed_means": [
+      188.4,
+      163.0,
+      180.4,
+      185.0,
+      174.2
+    ],
+    "mean": 178.2,
+    "std": 8.968388930014132
+  },
+  "PPO_BC_simple_best": {
+    "pairs_used": [
+      {
+        "bc_train_seed": 9456,
+        "bc_test_seed": 2888
+      },
+      {
+        "bc_train_seed": 1887,
+        "bc_test_seed": 7424
+      },
+      {
+        "bc_train_seed": 5578,
+        "bc_test_seed": 7360
+      },
+      {
+        "bc_train_seed": 5987,
+        "bc_test_seed": 4467
+      }
+    ],
+    "num_games_per_pair": 100,
+    "PPO_BC_train+BC_test_0": {
+      "values": [
+        160.4,
+        158.4,
+        163.0,
+        161.0
+      ],
+      "mean": 160.7,
+      "std": 1.6401219466856702
+    },
+    "PPO_BC_test+BC_test_0": {
+      "values": [
+        170.4,
+        151.8,
+        162.8,
+        166.6
+      ],
+      "mean": 162.9,
+      "std": 6.949100661236671
+    }
+  },
+  "paper_simple_reference": {
+    "SP+SP": 198.8,
+    "PPO_BC_train+BC_test_0": 156.4,
+    "PPO_BC_test+BC_test_0": 163.7
+  }
+}

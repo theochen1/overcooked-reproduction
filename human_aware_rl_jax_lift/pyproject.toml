@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "human-aware-rl-jax-lift"
+version = "0.1.0"
+description = "JAX liftover of legacy human_aware_rl codebase"
+requires-python = ">=3.10"
+dependencies = [
+  "jax",
+  "jaxlib",
+  "flax",
+  "optax",
+  "numpy",
+  "pytest",
+  "pyyaml",
+]
+
+[tool.setuptools.packages.find]
+# Look one level up (overcooked-reproduction/) so setuptools sees
+# human_aware_rl_jax_lift/ as a proper namespace package, not a flat root.
+# This makes all subpackages importable as human_aware_rl_jax_lift.agents etc.
+where = [".."]
+include = ["human_aware_rl_jax_lift*"]
